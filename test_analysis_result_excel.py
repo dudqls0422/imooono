@@ -242,6 +242,37 @@ class StepsAndMainTests(TmpMixin):
         # 15 스텝 중 1건만 실패 → 최소 13장은 임베드
         self.assertGreaterEqual(len(ws._images), 13)
 
+    def test_13_step_exception_uses_human_caption_not_funcname(self):
+        """스텝이 캡션 반환 전 예외로 죽어도 캡션 셀엔 사람이 읽는 한글 캡션이 들어가고
+        bare 함수명(TRUSS_FORCE 등)은 어느 셀에도 없어야 한다. 그 페이지엔 [캡처 실패] 표시."""
+
+        def boom(export_path):
+            raise RuntimeError("simulated step failure")
+
+        boom.__name__ = "TRUSS_FORCE"
+
+        d = os.path.join(self.tmp, "export13")
+        os.makedirs(d)
+        mod.EXPORT_DIR = d
+        mod.MATERIAL = "STL"
+        mod.INCLUDE_TRUSS_FORCE = True
+        mod.headers = {"MAPI-Key": "dummy"}
+        with mock.patch.object(mod, "TRUSS_FORCE", boom), \
+                self.mock_requests(), \
+                mock.patch.object(mod, "messagebox"), \
+                mock.patch.object(mod.os, "startfile", create=True):
+            mod.main()
+
+        ws = load_workbook(os.path.join(d, mod.RESULT_XLSX_NAME))["해석결과"]
+        texts = [str(c.value) for row in ws.iter_rows() for c in row if c.value is not None]
+        # 폴백 캡션이 사용됨
+        self.assertIn("가새 인장력(ENV_STR)", texts)
+        # 그 페이지는 캡처 실패로 표시
+        self.assertTrue(any("캡처 실패" in t for t in texts))
+        # 어느 캡션 셀에도 bare 스텝 함수명이 없어야 함
+        for funcname in mod.STEP_CAPTIONS:
+            self.assertNotIn(funcname, texts)
+
 
 # ---------------------------------------------------------------------------
 # 원본 무변경 확인
