@@ -704,6 +704,27 @@ def _safe_startfile(path):
 
 _counter = itertools.count(1)
 
+# 스텝이 캡션을 반환하기 전에 예외로 죽었을 때 쓰는 폴백 캡션.
+# 정상 경로는 각 스텝이 반환한 캡션(= body 의 DISPLAY.VIEW.DESCRIPTION 원문)을 그대로 쓰고,
+# 이 dict 는 예외 경로에서만 참조한다. 어느 캡션 셀에도 함수명이 노출되지 않게 하기 위함.
+STEP_CAPTIONS = {
+    "MAIN_MODLE": "구조해석모델",
+    "LOAD_DL_LL": "연직방향 하중입력",
+    "LOAD_WX": "X방향 풍하중입력",
+    "LOAD_WY": "Y방향 풍하중입력",
+    "LOAD_EX": "X방향 지진하중입력",
+    "LOAD_EY": "Y방향 지진하중입력",
+    "DEFORM_DL_LL": "연직하중에 의한 변위",
+    "DEFORM_WX": "풍하중에 의한 X방향 변위",
+    "DEFORM_WY": "풍하중에 의한 Y방향 변위",
+    "BEAM_DIAGRAMS_M": "휨모멘트(ENV_STR)",
+    "BEAM_DIAGRAMS_S": "전단력도(ENV_STR)",
+    "BEAM_DIAGRAMS_F": "축력도(ENV_STR)",
+    "TRUSS_FORCE": "가새 인장력(ENV_STR)",
+    "REACTION_FORCES_STR": "지점반력(ENV_STR)",
+    "REACTION_FORCES_SER": "지점반력(ENV_SER)",
+}
+
 
 def build_steps(include_truss_force):
     """실행할 캡처 스텝 함수 리스트를 반환한다. 순수 함수.
@@ -751,15 +772,16 @@ def run_captures(temp_dir, include_truss_force):
 
     캡처 응답이 200 이고 temp_dir 에 파일이 실제로 생기면 (경로, 캡션),
     그 외(비200 / 파일 미생성 / 예외)는 (None, 캡션) 을 넣어 페이지가 누락되지 않게 한다.
+    예외로 스텝이 캡션을 반환하지 못한 경우엔 STEP_CAPTIONS 폴백 캡션을 쓴다(함수명 노출 금지).
     """
     items = []
     for step in build_steps(include_truss_force):
         export_path = next_export_path(temp_dir)
         try:
             ok, caption = step(export_path)
-        except Exception as exc:  # 네트워크/응답 파싱 실패 등
+        except Exception as exc:  # 네트워크/응답 파싱 실패, 반환값 형식 오류 등
             print(f"  [예외] {step.__name__}: {exc}")
-            items.append((None, step.__name__))
+            items.append((None, STEP_CAPTIONS.get(step.__name__, "알 수 없는 스텝")))
             continue
         if ok and wait_for_file(export_path):
             items.append((export_path, caption))
