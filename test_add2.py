@@ -51,6 +51,14 @@ class ParseOperandTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_operand("07", 1)
 
+    def test_arabic_indic_digits(self):  # (18) ASCII-only regression
+        with self.assertRaises(ValueError):
+            parse_operand("٤٢", 1)  # Arabic-Indic "42"
+
+    def test_fullwidth_digits(self):  # (19) ASCII-only regression
+        with self.assertRaises(ValueError):
+            parse_operand("４２", 1)  # full-width "42"
+
 
 class MainTests(unittest.TestCase):
     def _run(self, argv):
@@ -86,6 +94,11 @@ class MainTests(unittest.TestCase):
     def test_too_many_args(self):  # (17)
         code, out, err = self._run(["1", "2", "3"])
         self.assertEqual(code, 2)
+
+    def test_non_ascii_digits_rejected(self):  # (20) ASCII-only regression
+        code, out, err = self._run(["٤٢", "10"])
+        self.assertEqual(code, 1)
+        self.assertIn("Error:", err)
 
 
 if __name__ == "__main__":
