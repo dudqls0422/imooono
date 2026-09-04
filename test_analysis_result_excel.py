@@ -9,13 +9,17 @@
 import contextlib
 import hashlib
 import importlib.util
+import io
+import math
 import os
+import re
 import shutil
 import tempfile
 import unittest
 from unittest import mock
 
 from openpyxl import load_workbook
+from openpyxl.utils import column_index_from_string
 from PIL import Image as PILImage
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -198,6 +202,104 @@ class BuildResultExcelTests(TmpMixin):
         self.assertEqual(len(set(titles)), len(titles))
         for t in titles:
             self.assertLessEqual(len(t), 31)
+
+
+def _parse_range_end(area):
+    """print_area 문자열(예 "'01'!$A$1:$T$36" / "A1:T36")에서 끝 셀 (열idx, 행) 추출."""
+    s = area if isinstance(area, str) else (area[0] if area else "")
+    s = s.replace("$", "")
+    if "!" in s:
+        s = s.split("!", 1)[1]
+    m = re.search(r":([A-Za-z]+)(\d+)$", s)
+    if not m:
+        m = re.match(r"^([A-Za-z]+)(\d+)$", s)  # 단일 셀
+    assert m, f"print_area 파싱 실패: {area!r}"
+    return column_index_from_string(m.group(1)), int(m.group(2))
+
+
+# ---------------------------------------------------------------------------
+# 인쇄 중앙정렬 (A4 정중앙 배치)
+# ---------------------------------------------------------------------------
+class PrintCenteringTests(TmpMixin):
+    def _jpg(self, name="a.jpg", size=(1280, 768)):
+        p = os.path.join(self.tmp, name)
+        make_jpg(p, size=size)
+        return p
+
+    def _build(self, items, name="out.xlsx"):
+        out = os.path.join(self.tmp, name)
+        mod.build_result_excel(items, out, "STL")
+        return load_workbook(out)
+
+    def test_all_sheets_centered_both_axes(self):
+        p = self._jpg()
+        wb = self._build([(p, "c0"), (p, "c1"), (None, "실패")])
+        for ws in wb.worksheets:
+            self.assertIs(ws.print_options.horizontalCentered, True)
+            self.assertIs(ws.print_options.verticalCentered, True)
+
+    def test_success_sheet_print_area_covers_image(self):
+        p = self._jpg(size=(1280, 768))
+        wb = self._build([(p, "c0")])
+        ws = wb.worksheets[0]
+        self.assertTrue(ws._images)
+        # 풋프린트는 스케일된 이미지 크기(1180px 폭, 1280:768 비율) 기준으로 계산됨.
+        # (재로드된 img.width/height 는 원본 native 1280x768 이라 기준으로 쓰지 않는다.)
+        scaled_w = 1180
+        scaled_h = round(scaled_w * 768 / 1280)  # 708
+        min_cols = math.ceil(scaled_w / 64)      # 19
+        min_rows = math.ceil(scaled_h / 20)      # 36
+        end_col, end_row = _parse_range_end(ws.print_area)
+        self.assertGreaterEqual(end_col, min_cols)
+        self.assertGreaterEqual(end_row, min_rows)
+        self.assertLessEqual(end_col, min_cols + 3)
+        self.assertLessEqual(end_row, min_rows + 3)
+        # 시작이 A1 인지
+        norm = (ws.print_area if isinstance(ws.print_area, str)
+                else ws.print_area[0]).replace("$", "")
+        self.assertIn("A1", norm)
+
+    def test_failure_sheet_a1_centered(self):
+        p = self._jpg()
+        cap = "가새 인장력(ENV_STR)"
+        wb = self._build([(p, "ok"), (None, cap)])
+        ws = wb.worksheets[1]
+        self.assertEqual(len(ws._images), 0)
+        self.assertTrue(ws["A1"].value.startswith("[캡처 실패]"))
+        self.assertEqual(ws["A1"].font.color.rgb, "FFFF0000")
+        self.assertEqual(ws["A1"].alignment.horizontal, "center")
+        self.assertEqual(ws["A1"].alignment.vertical, "center")
+
+    def test_centering_does_not_break_page_setup(self):
+        p = self._jpg()
+        wb = self._build([(p, "c0"), (None, "c1")])
+        for ws in wb.worksheets:
+            self.assertEqual(int(ws.page_setup.paperSize), 9)
+            self.assertEqual(ws.page_setup.orientation, "landscape")
+            self.assertEqual(int(ws.page_setup.fitToWidth), 1)
+            self.assertEqual(int(ws.page_setup.fitToHeight), 1)
+            self.assertEqual(len(ws.row_breaks), 0)
+        # 성공 시트 셀 텍스트 0 유지
+        vals = [c.value for row in wb.worksheets[0].iter_rows()
+                for c in row if c.value is not None]
+        self.assertEqual(vals, [])
+
+    def test_bytesio_roundtrip_keeps_centered_and_margins(self):
+        p = self._jpg()
+        out = os.path.join(self.tmp, "rt.xlsx")
+        mod.build_result_excel([(p, "c0"), (None, "c1")], out, "STL")
+        with open(out, "rb") as f:
+            buf = io.BytesIO(f.read())
+        wb = load_workbook(buf)
+        for ws in wb.worksheets:
+            self.assertIs(ws.print_options.horizontalCentered, True)
+            self.assertIs(ws.print_options.verticalCentered, True)
+            self.assertEqual(ws.page_margins.left, 0.5)
+            self.assertEqual(ws.page_margins.right, 0.5)
+            self.assertEqual(ws.page_margins.top, 0.5)
+            self.assertEqual(ws.page_margins.bottom, 0.5)
+            self.assertEqual(ws.page_margins.header, 0.2)
+            self.assertEqual(ws.page_margins.footer, 0.2)
 
 
 # ---------------------------------------------------------------------------
