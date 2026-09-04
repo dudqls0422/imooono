@@ -16,6 +16,7 @@
 쓰게 하되 그 경로만 임시폴더로 돌리는 폴백 방식을 쓴다. 매뉴얼 확인이 되면 열려 있는 개선점이다.
 """
 import itertools
+import math
 import os
 import shutil
 import tempfile
@@ -26,7 +27,8 @@ from tkinter import messagebox
 import requests
 from openpyxl import Workbook
 from openpyxl.drawing.image import Image as XLImage
-from openpyxl.styles import Font
+from openpyxl.styles import Alignment, Font
+from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.page import PageMargins
 from openpyxl.worksheet.properties import PageSetupProperties
 from PIL import Image as PILImage
@@ -798,6 +800,8 @@ def build_result_excel(items, out_path, material, orientation="landscape"):
 
     이 Excel 은 이미지당 시트 1개로 구성된다. 전부 인쇄하려면 인쇄 대화상자에서
     '전체 통합 문서(Entire Workbook)' 를 선택할 것. '활성 시트만' 을 인쇄하면 1장만 나온다.
+    인쇄 시 이미지/텍스트는 A4 페이지 정중앙(가로·세로)에 온다
+    (모든 시트 print_options.horizontalCentered / verticalCentered = True).
 
     items : (이미지경로 | None, 캡션) 리스트. 리스트 순서 = 시트 순서.
             성공 시트는 이미지만(셀 텍스트 없음), 실패 시트(경로 None 또는 파일 없음)는
@@ -833,6 +837,10 @@ def build_result_excel(items, out_path, material, orientation="landscape"):
             hf.center.text = ""
             hf.right.text = ""
 
+        # 인쇄 시 내용을 A4 페이지 가로·세로 정중앙에 (여백 재분배만 하므로 fitTo 와 충돌 없음).
+        ws.print_options.horizontalCentered = True
+        ws.print_options.verticalCentered = True
+
         if img_path and os.path.exists(img_path):
             try:
                 with PILImage.open(img_path) as im:
@@ -845,10 +853,16 @@ def build_result_excel(items, out_path, material, orientation="landscape"):
             xl_img.width = TARGET_WIDTH_PX
             xl_img.height = int(round(TARGET_WIDTH_PX * ih / iw))
             ws.add_image(xl_img, "A1")
+            # 구버전 Excel 에서도 중앙정렬 기준 범위가 잡히도록 이미지 풋프린트를 print_area 로 명시.
+            # 기본 열폭 ~64px, 기본 행높이 ~20px 기준 + 여유 1.
+            cols = math.ceil(xl_img.width / 64) + 1
+            rows = math.ceil(xl_img.height / 20) + 1
+            ws.print_area = f"A1:{get_column_letter(cols)}{rows}"
         else:
             cell = ws["A1"]
             cell.value = f"[캡처 실패] {caption}"
             cell.font = fail_font
+            cell.alignment = Alignment(horizontal="center", vertical="center")
 
     out_dir = os.path.dirname(out_path)
     if out_dir:
