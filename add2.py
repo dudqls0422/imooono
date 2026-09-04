@@ -12,9 +12,11 @@ to stderr and the process exits non-zero. Standard library only.
 import re
 import sys
 
-# A valid operand (after stripping) is a run of ASCII digits: no sign, no
-# decimal point, no internal whitespace.
-_INTEGER_RE = re.compile(r"^\d+$")
+# A valid operand (after stripping) is a run of ASCII digits 0-9: no sign, no
+# decimal point, no internal whitespace, no non-ASCII digits. The re.ASCII flag
+# is required because a bare \d also matches Unicode decimal digits (e.g. the
+# Arabic-Indic or full-width forms) in Python 3.
+_INTEGER_RE = re.compile(r"^\d+$", re.ASCII)
 
 USAGE = "Usage: python add2.py <a> <b>   (each a 2-digit integer, 10-99)"
 
