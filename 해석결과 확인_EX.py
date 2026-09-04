@@ -3,9 +3,13 @@
 
 원본 ``해석결과 확인.py`` 에서 다음을 확장한 수정본이다.
 - GUI 에 "가새 인장력(브레이스) 캡처 포함" 체크박스 추가(기본 체크). 해제 시 TRUSS_FORCE 스텝만 건너뛴다.
-- 캡처 JPG 를 ``EXPORT_DIR`` 밖 임시폴더에 만든 뒤 단일 Excel 에 임베드하고, 종료 시 임시폴더를 삭제한다.
+- 캡처 JPG 를 ``EXPORT_DIR`` 밖 임시폴더에 만든 뒤 Excel 에 임베드하고, 종료 시 임시폴더를 삭제한다.
   따라서 ``EXPORT_DIR`` 에는 최종 ``.xlsx`` 만 남고 기존 ``model_*.jpg`` 는 건드리지 않는다.
 - 캡처 파라미터(ANGLE / DISPLAY / RESULT_GRAPHIC / LOAD 등)와 뷰 로직은 원본과 100% 동일하다.
+
+인쇄 주의: 결과 Excel 은 **이미지당 워크시트 1개**로 구성된다. 전부 인쇄하려면 인쇄
+대화상자에서 '전체 통합 문서(Entire Workbook)' 를 선택해야 한다. '활성 시트만' 인쇄하면
+1장만 나온다. (캡션/설명 텍스트는 넣지 않으며, 실패한 스텝만 A1 에 "[캡처 실패] ..." 표시.)
 
 참고: ``/view/CAPTURE`` 가 이미지 바이트/base64 를 직접 반환하는지는 공식 매뉴얼 미확인이라,
 이미지를 메모리로 받는 최적화는 적용하지 않았다. 원본과 동일하게 ``EXPORT_PATH`` 로 파일을
@@ -23,7 +27,6 @@ import requests
 from openpyxl import Workbook
 from openpyxl.drawing.image import Image as XLImage
 from openpyxl.styles import Font
-from openpyxl.worksheet.pagebreak import Break
 from openpyxl.worksheet.page import PageMargins
 from openpyxl.worksheet.properties import PageSetupProperties
 from PIL import Image as PILImage
@@ -791,38 +794,44 @@ def run_captures(temp_dir, include_truss_force):
 
 
 def build_result_excel(items, out_path, material, orientation="landscape"):
-    """캡처 결과를 가로 A4 Excel 한 장(시트 '해석결과')으로 만든다. 순수 함수(네트워크 없음).
+    """캡처 결과를 **이미지당 워크시트 1개**인 Excel 로 만든다. 순수 함수(네트워크 없음).
 
-    items: (이미지경로 | None, 캡션) 리스트. 페이지 순서 = 리스트 순서, 페이지당 이미지 1장.
-    이미지 경로가 None 이면 그 페이지에 빨간 '[캡처 실패]' 셀을 넣는다(페이지는 유지).
-    items 가 비면 ValueError 를 던진다.
+    이 Excel 은 이미지당 시트 1개로 구성된다. 전부 인쇄하려면 인쇄 대화상자에서
+    '전체 통합 문서(Entire Workbook)' 를 선택할 것. '활성 시트만' 을 인쇄하면 1장만 나온다.
+
+    items : (이미지경로 | None, 캡션) 리스트. 리스트 순서 = 시트 순서.
+            성공 시트는 이미지만(셀 텍스트 없음), 실패 시트(경로 None 또는 파일 없음)는
+            A1 에 빨간 '[캡처 실패] <캡션>'. 페이지 누락 없음.
+    material : 레이아웃에 쓰이지 않는다(시그니처/호출부 안정성을 위해 유지).
+    items 가 비면 ValueError.
     """
     if not items:
         raise ValueError("items 가 비어 있어 Excel 을 생성할 수 없습니다.")
 
-    ROWS_PER_PAGE = 45
-    TARGET_WIDTH_PX = 980  # 가로 A4 인쇄폭(좌우 0.5in 여백 제외) 근사
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "해석결과"
-
-    ws.page_setup.paperSize = 9  # 9 = A4
-    ws.page_setup.orientation = orientation
-    ws.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
-    ws.page_setup.fitToWidth = 1
-    ws.page_setup.fitToHeight = 0
-    ws.page_margins = PageMargins(left=0.5, right=0.5, top=0.5, bottom=0.5,
-                                  header=0.2, footer=0.2)
-
-    caption_font = Font(bold=True, size=12)
-    material_font = Font(size=9, italic=True)
+    _ = material  # 레이아웃 미사용 (의도적으로 유지)
+    TARGET_WIDTH_PX = 1180
     fail_font = Font(bold=True, color="FFFF0000")
 
+    wb = Workbook()
+
     for i, (img_path, caption) in enumerate(items):
-        base = i * ROWS_PER_PAGE + 1
-        ws.cell(row=base, column=1, value=caption).font = caption_font
-        ws.cell(row=base + 1, column=1, value=f"MATERIAL: {material}").font = material_font
+        ws = wb.active if i == 0 else wb.create_sheet()
+        ws.title = f"{i + 1:02d}"  # "01", "02", ... 캡션/설명은 탭에 넣지 않는다
+
+        # 모든 시트 동일: 가로 A4, 시트 1개 = 물리 페이지 1장 (fitToHeight=1 로 구조적 보장).
+        ws.page_setup.paperSize = 9  # 9 = A4
+        ws.page_setup.orientation = orientation
+        ws.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
+        ws.page_setup.fitToWidth = 1
+        ws.page_setup.fitToHeight = 1
+        ws.page_margins = PageMargins(left=0.5, right=0.5, top=0.5, bottom=0.5,
+                                      header=0.2, footer=0.2)
+        # 헤더/푸터/페이지번호 없음 (기본이 비어 있어도 방어적으로 비운다).
+        for part in ("oddHeader", "oddFooter", "evenHeader", "evenFooter"):
+            hf = getattr(ws, part)
+            hf.left.text = ""
+            hf.center.text = ""
+            hf.right.text = ""
 
         if img_path and os.path.exists(img_path):
             try:
@@ -835,12 +844,11 @@ def build_result_excel(items, out_path, material, orientation="landscape"):
             xl_img = XLImage(img_path)
             xl_img.width = TARGET_WIDTH_PX
             xl_img.height = int(round(TARGET_WIDTH_PX * ih / iw))
-            ws.add_image(xl_img, f"A{base + 3}")
+            ws.add_image(xl_img, "A1")
         else:
-            ws.cell(row=base + 3, column=1, value="[캡처 실패]").font = fail_font
-
-        if i < len(items) - 1:
-            ws.row_breaks.append(Break(id=(i + 1) * ROWS_PER_PAGE))
+            cell = ws["A1"]
+            cell.value = f"[캡처 실패] {caption}"
+            cell.font = fail_font
 
     out_dir = os.path.dirname(out_path)
     if out_dir:

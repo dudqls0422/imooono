@@ -1,7 +1,10 @@
-"""`해석결과 확인_EX.py` 테스트 (Plan 지정 12건 + 원본 무변경 확인).
+"""`해석결과 확인_EX.py` 테스트.
 
 파일명에 공백이 있어 import 문으로 못 불러오므로 importlib 로 로드한다.
 실행: python -m unittest
+
+레이아웃: build_result_excel 은 이미지당 워크시트 1개(탭 "01".."NN"), 페이지나눔·캡션 셀 없음,
+성공 시트는 이미지만, 실패 시트는 A1 에 "[캡처 실패] <캡션>".
 """
 import contextlib
 import hashlib
@@ -35,6 +38,17 @@ def make_jpg(path, size=(1280, 768), color=(200, 120, 60)):
     PILImage.new("RGB", size, color).save(path, "JPEG")
 
 
+def all_texts(wb):
+    """통합 문서 전 시트의 값 있는 셀 텍스트를 리스트로."""
+    out = []
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for c in row:
+                if c.value is not None:
+                    out.append(str(c.value))
+    return out
+
+
 def _sha(path):
     with open(path, "rb") as f:
         return hashlib.sha256(f.read()).hexdigest()
@@ -44,7 +58,6 @@ class TmpMixin(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="test_arex_")
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
-        # 뮤테이트하는 모듈 전역 스냅샷 후 복원
         self._saved = {k: getattr(mod, k) for k in
                        ("EXPORT_DIR", "MATERIAL", "INCLUDE_TRUSS_FORCE", "headers")}
         self.addCleanup(self._restore)
@@ -98,83 +111,110 @@ class TmpMixin(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# build_result_excel (1-6)
+# build_result_excel — 이미지당 시트 1개 레이아웃 (1-10)
 # ---------------------------------------------------------------------------
 class BuildResultExcelTests(TmpMixin):
-    def _open(self, out):
-        return load_workbook(out)["해석결과"]
+    def _jpg(self, name="a.jpg", size=(1280, 768)):
+        p = os.path.join(self.tmp, name)
+        make_jpg(p, size=size)
+        return p
 
-    def test_01_images_count_matches_paths(self):
-        p1 = os.path.join(self.tmp, "a.jpg")
-        p2 = os.path.join(self.tmp, "b.jpg")
-        make_jpg(p1)
-        make_jpg(p2)
-        items = [(p1, "캡션1"), (p2, "캡션2"), (p1, "캡션3")]
-        out = os.path.join(self.tmp, "out1.xlsx")
+    def _build(self, items, name="out.xlsx"):
+        out = os.path.join(self.tmp, name)
         mod.build_result_excel(items, out, "STL")
-        ws = self._open(out)
-        self.assertEqual(len(ws._images), 3)
+        return load_workbook(out)
 
-    def test_02_none_path_placeholder(self):
-        p1 = os.path.join(self.tmp, "a.jpg")
-        make_jpg(p1)
-        items = [(p1, "성공"), (None, "실패한 스텝")]
-        out = os.path.join(self.tmp, "out2.xlsx")
-        mod.build_result_excel(items, out, "RC")
-        ws = self._open(out)
-        self.assertEqual(len(ws._images), 1)
-        texts = [str(c.value) for row in ws.iter_rows() for c in row if c.value is not None]
-        self.assertTrue(any("캡처 실패" in t for t in texts))
+    def test_01_one_sheet_per_item(self):
+        p = self._jpg()
+        for n in (15, 14):
+            wb = self._build([(p, f"c{i}") for i in range(n)], f"out{n}.xlsx")
+            self.assertEqual(len(wb.worksheets), n)
 
-    def test_03_page_setup_landscape_a4(self):
-        p1 = os.path.join(self.tmp, "a.jpg")
-        make_jpg(p1)
-        out = os.path.join(self.tmp, "out3.xlsx")
-        mod.build_result_excel([(p1, "c1"), (p1, "c2")], out, "STL")
-        ws = self._open(out)
-        self.assertEqual(int(ws.page_setup.paperSize), 9)
-        self.assertEqual(ws.page_setup.orientation, "landscape")
-        self.assertEqual(int(ws.page_setup.fitToWidth), 1)
+    def test_02_all_sheets_landscape_a4_fit_1x1(self):
+        p = self._jpg()
+        wb = self._build([(p, "c0"), (p, "c1"), (None, "c2")])
+        for ws in wb.worksheets:
+            self.assertEqual(ws.page_setup.orientation, "landscape")
+            self.assertEqual(int(ws.page_setup.paperSize), 9)
+            self.assertTrue(ws.sheet_properties.pageSetUpPr.fitToPage)
+            self.assertEqual(int(ws.page_setup.fitToWidth), 1)
+            self.assertEqual(int(ws.page_setup.fitToHeight), 1)
 
-    def test_04_caption_cell_text_exact(self):
-        p1 = os.path.join(self.tmp, "a.jpg")
-        make_jpg(p1)
+    def test_03_no_page_breaks(self):
+        p = self._jpg()
+        wb = self._build([(p, "c0"), (p, "c1")])
+        for ws in wb.worksheets:
+            self.assertEqual(len(ws.row_breaks), 0)
+            self.assertEqual(len(ws.col_breaks), 0)
+
+    def test_04_success_sheet_has_no_text(self):
+        p = self._jpg()
+        wb = self._build([(p, "c0"), (p, "c1")])
+        for ws in wb.worksheets:
+            vals = [c.value for row in ws.iter_rows() for c in row if c.value is not None]
+            self.assertEqual(vals, [])
+
+    def test_05_image_count_per_sheet(self):
+        p = self._jpg()
+        wb = self._build([(p, "ok"), (None, "fail")])
+        self.assertEqual(len(wb.worksheets[0]._images), 1)
+        self.assertEqual(len(wb.worksheets[1]._images), 0)
+
+    def test_06_image_aspect_ratio_preserved(self):
+        p = self._jpg(size=(1280, 768))
+        wb = self._build([(p, "c0")])
+        img = wb.worksheets[0]._images[0]
+        self.assertLess(abs(img.width / img.height - 1280 / 768), 0.02)
+
+    def test_07_failure_sheet_a1_text_and_color(self):
+        p = self._jpg()
         cap = "가새 인장력(ENV_STR)"
-        out = os.path.join(self.tmp, "out4.xlsx")
-        mod.build_result_excel([(p1, cap), (p1, "다음")], out, "STL")
-        ws = self._open(out)
-        self.assertEqual(ws["A1"].value, cap)
+        wb = self._build([(p, "ok"), (None, cap)])
+        ws = wb.worksheets[1]
+        self.assertEqual(len(ws._images), 0)
+        self.assertTrue(ws["A1"].value.startswith("[캡처 실패]"))
+        self.assertIn(cap, ws["A1"].value)
+        self.assertEqual(ws["A1"].font.color.rgb, "FFFF0000")
 
-    def test_05_page_break_per_item(self):
-        p1 = os.path.join(self.tmp, "a.jpg")
-        make_jpg(p1)
-        items = [(p1, f"c{i}") for i in range(4)]
-        out = os.path.join(self.tmp, "out5.xlsx")
-        mod.build_result_excel(items, out, "STL")
-        ws = self._open(out)
-        self.assertGreaterEqual(len(ws.row_breaks), len(items) - 1)
+    def test_08_mixed_real_none_missing_keeps_order(self):
+        real = self._jpg()
+        missing = os.path.join(self.tmp, "does_not_exist.jpg")
+        wb = self._build([(real, "01c"), (None, "02c"), (missing, "03c")])
+        self.assertEqual([ws.title for ws in wb.worksheets], ["01", "02", "03"])
+        self.assertEqual(len(wb.worksheets[0]._images), 1)
+        self.assertEqual(len(wb.worksheets[1]._images), 0)
+        self.assertEqual(len(wb.worksheets[2]._images), 0)
+        self.assertTrue(wb.worksheets[2]["A1"].value.startswith("[캡처 실패]"))
 
-    def test_06_empty_items_raises(self):
-        out = os.path.join(self.tmp, "out6.xlsx")
+    def test_09_empty_items_raises(self):
         with self.assertRaises(ValueError):
-            mod.build_result_excel([], out, "STL")
+            mod.build_result_excel([], os.path.join(self.tmp, "x.xlsx"), "STL")
+
+    def test_10_tab_names_format_unique_len(self):
+        p = self._jpg()
+        wb = self._build([(p, f"c{i}") for i in range(12)])
+        titles = [ws.title for ws in wb.worksheets]
+        self.assertEqual(titles, [f"{i + 1:02d}" for i in range(12)])
+        self.assertEqual(len(set(titles)), len(titles))
+        for t in titles:
+            self.assertLessEqual(len(t), 31)
 
 
 # ---------------------------------------------------------------------------
-# build_steps / main 통합 (7-12)
+# build_steps / main 통합 (회귀)
 # ---------------------------------------------------------------------------
 class StepsAndMainTests(TmpMixin):
-    def test_07_build_steps_include_truss(self):
+    def test_build_steps_include_truss(self):
         steps = mod.build_steps(True)
         self.assertEqual(len(steps), 15)
         self.assertIn(mod.TRUSS_FORCE, steps)
 
-    def test_08_build_steps_exclude_truss(self):
+    def test_build_steps_exclude_truss(self):
         steps = mod.build_steps(False)
         self.assertEqual(len(steps), 14)
         self.assertNotIn(mod.TRUSS_FORCE, steps)
 
-    def test_09_main_leaves_only_xlsx_in_export_dir(self):
+    def test_main_leaves_only_xlsx_in_export_dir(self):
         d = os.path.join(self.tmp, "export")
         os.makedirs(d)
         for i in range(1, 4):
@@ -190,8 +230,8 @@ class StepsAndMainTests(TmpMixin):
         still = sorted(f for f in os.listdir(d) if f.startswith("model_"))
         self.assertEqual(still, existing)
 
-    def test_10_main_removes_tempdir_on_success(self):
-        d = os.path.join(self.tmp, "export10")
+    def test_main_removes_tempdir_on_success(self):
+        d = os.path.join(self.tmp, "export_ok")
         os.makedirs(d)
         created = {}
         real_mkdtemp = tempfile.mkdtemp
@@ -206,8 +246,8 @@ class StepsAndMainTests(TmpMixin):
         self.assertIn("p", created)
         self.assertFalse(os.path.exists(created["p"]))
 
-    def test_11_main_removes_tempdir_when_excel_fails(self):
-        d = os.path.join(self.tmp, "export11")
+    def test_main_removes_tempdir_when_excel_fails(self):
+        d = os.path.join(self.tmp, "export_err")
         os.makedirs(d)
         created = {}
         real_mkdtemp = tempfile.mkdtemp
@@ -230,28 +270,29 @@ class StepsAndMainTests(TmpMixin):
                 mod.main()
         self.assertFalse(os.path.exists(created["p"]))
 
-    def test_12_one_capture_non200_placeholder_rest_ok(self):
-        d = os.path.join(self.tmp, "export12")
+    def test_one_capture_non200_placeholder_rest_ok(self):
+        d = os.path.join(self.tmp, "export_partial")
         os.makedirs(d)
         self.run_main_with_export_dir(d, fail_capture_indices=(2,))
         out = os.path.join(d, mod.RESULT_XLSX_NAME)
         self.assertTrue(os.path.exists(out))
-        ws = load_workbook(out)["해석결과"]
-        texts = [str(c.value) for row in ws.iter_rows() for c in row if c.value is not None]
-        self.assertTrue(any("캡처 실패" in t for t in texts))
-        # 15 스텝 중 1건만 실패 → 최소 13장은 임베드
-        self.assertGreaterEqual(len(ws._images), 13)
+        wb = load_workbook(out)
+        self.assertEqual(len(wb.worksheets), 15)
+        texts = all_texts(wb)
+        self.assertTrue(any(t.startswith("[캡처 실패]") for t in texts))
+        total_images = sum(len(ws._images) for ws in wb.worksheets)
+        self.assertEqual(total_images, 14)
 
-    def test_13_step_exception_uses_human_caption_not_funcname(self):
-        """스텝이 캡션 반환 전 예외로 죽어도 캡션 셀엔 사람이 읽는 한글 캡션이 들어가고
-        bare 함수명(TRUSS_FORCE 등)은 어느 셀에도 없어야 한다. 그 페이지엔 [캡처 실패] 표시."""
+    def test_step_exception_uses_human_caption_not_funcname(self):
+        """스텝이 캡션 반환 전 예외로 죽어도 실패 시트 A1 엔 사람이 읽는 한글 캡션이 들어가고
+        bare 함수명(TRUSS_FORCE 등)은 어느 셀에도 없어야 한다."""
 
         def boom(export_path):
             raise RuntimeError("simulated step failure")
 
         boom.__name__ = "TRUSS_FORCE"
 
-        d = os.path.join(self.tmp, "export13")
+        d = os.path.join(self.tmp, "export_exc")
         os.makedirs(d)
         mod.EXPORT_DIR = d
         mod.MATERIAL = "STL"
@@ -263,15 +304,12 @@ class StepsAndMainTests(TmpMixin):
                 mock.patch.object(mod.os, "startfile", create=True):
             mod.main()
 
-        ws = load_workbook(os.path.join(d, mod.RESULT_XLSX_NAME))["해석결과"]
-        texts = [str(c.value) for row in ws.iter_rows() for c in row if c.value is not None]
-        # 폴백 캡션이 사용됨
-        self.assertIn("가새 인장력(ENV_STR)", texts)
-        # 그 페이지는 캡처 실패로 표시
-        self.assertTrue(any("캡처 실패" in t for t in texts))
-        # 어느 캡션 셀에도 bare 스텝 함수명이 없어야 함
+        wb = load_workbook(os.path.join(d, mod.RESULT_XLSX_NAME))
+        texts = all_texts(wb)
+        self.assertIn("[캡처 실패] 가새 인장력(ENV_STR)", texts)
+        joined = " || ".join(texts)
         for funcname in mod.STEP_CAPTIONS:
-            self.assertNotIn(funcname, texts)
+            self.assertNotIn(funcname, joined)
 
 
 # ---------------------------------------------------------------------------
