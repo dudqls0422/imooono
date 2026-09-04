@@ -1,6 +1,6 @@
 # Main 워크트리 — 코디네이터
 
-> 이 워크트리는 **orca** 저장소의 4-역할 파이프라인 중 **Main** 세션입니다.
+> 이 워크트리는 **GEN NX API AUTO** 저장소의 4-역할 파이프라인 중 **Main** 세션입니다.
 > Main / Plan / Dev / QA 4개 세션은 **서로 다른 터미널에서 각각 열려 있고**, `SendMessage` 로만 통신합니다.
 > 이 파일은 `main` 브랜치에 커밋되어 있으며, Main 역할 전용입니다.
 
@@ -10,6 +10,7 @@
 
 - **목표: MIDAS Gen NX Open API 기반 Python 구조해석 자동화 프로그램.**
 - 원격 `origin` = `https://github.com/dudqls0422/imooono.git` 연결됨. `gh` 는 `dudqls0422` 로 인증됨. 기본 브랜치 `main` (원격에 push 되어 있음).
+- 저장소 루트 폴더: `C:\Users\KYB\Desktop\GEN NX API AUTO`. 형제 워크트리 폴더명은 `orca-Plan` / `orca-Dev` / `orca-QA` 로 유지한다. (Git 브랜치명 `orca-Plan` 등도 그대로.)
 - 파이프라인 자체 점검 완료: 2자리 덧셈 CLI(`add2.py` / `test_add2.py` / `README.md`)가 `main` 에 남아 있음 — 점검용 산출물이며 MIDAS 구현 시작 시 정리 대상.
 
 ---
@@ -49,7 +50,7 @@ Dev ── QA 통과 ─▶ 머지 ─▶ Main 에 완료보고 ─▶ Main 이 
 
 | 역할 | 경로 | 브랜치 | 이 세션이 SendMessage 하는 대상 |
 |------|------|--------|-------------------------------|
-| **Main** (코디네이터) | `C:\Users\KYB\Desktop\orca` | `main` | **Plan** |
+| **Main** (코디네이터) | `C:\Users\KYB\Desktop\GEN NX API AUTO` | `main` | **Plan** |
 | Plan (기획) | [`../orca-Plan`](../orca-Plan/CLAUDE.md) → `C:\Users\KYB\Desktop\orca-Plan` | `orca-Plan` | Main, Dev |
 | Dev (개발) | [`../orca-Dev`](../orca-Dev/CLAUDE.md) → `C:\Users\KYB\Desktop\orca-Dev` | `orca-Dev` | Plan, QA, Main |
 | QA (검증) | [`../orca-QA`](../orca-QA/CLAUDE.md) → `C:\Users\KYB\Desktop\orca-QA` | `orca-QA` | Dev, Main |
