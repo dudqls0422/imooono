@@ -3,3 +3,7 @@
 *.py text eol=lf
 *.txt text eol=lf
 *.md text eol=lf
+
+# 원본 캡처 스크립트는 데스크톱 사본(CRLF)과 "그대로" 바이트 동일해야 하므로
+# 줄바꿈 변환에서 제외한다. (수정본 해석결과 확인_EX.py 는 위 규칙대로 LF.)
+"해석결과 확인.py" -text
