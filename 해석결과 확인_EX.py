@@ -46,6 +46,16 @@ except OSError:
 # 최종 Excel 파일명(재실행 시 덮어쓰기).
 RESULT_XLSX_NAME = "해석결과 확인_EX.xlsx"
 
+# ============ 가로 A4 인쇄영역 (이미지 축소율 계산 기준) ============
+# 매직넘버 대신 A4 인쇄영역에서 축소율을 명시 계산한다. 이미지는 이 영역 안에
+# 들어오도록 축소만 하고(확대 금지), 비율은 유지한다.
+DPI = 96
+A4_LS_W_IN = 297 / 25.4   # 가로 A4 폭(inch)
+A4_LS_H_IN = 210 / 25.4   # 가로 A4 높이(inch)
+MARGIN_IN = 0.5           # 상하좌우 여백(inch) — 아래 PageMargins 와 일치시킨다
+PRINTABLE_W_PX = round((A4_LS_W_IN - 2 * MARGIN_IN) * DPI)   # ≈ 1027
+PRINTABLE_H_PX = round((A4_LS_H_IN - 2 * MARGIN_IN) * DPI)   # ≈ 698
+
 # ============ GUI로 입력받을 전역 변수 ============
 MAPI_KEY = None
 MATERIAL = "STL"      # 기본값: 철골
@@ -800,8 +810,14 @@ def build_result_excel(items, out_path, material, orientation="landscape"):
 
     이 Excel 은 이미지당 시트 1개로 구성된다. 전부 인쇄하려면 인쇄 대화상자에서
     '전체 통합 문서(Entire Workbook)' 를 선택할 것. '활성 시트만' 을 인쇄하면 1장만 나온다.
-    인쇄 시 이미지/텍스트는 A4 페이지 정중앙(가로·세로)에 온다
-    (모든 시트 print_options.horizontalCentered / verticalCentered = True).
+
+    인쇄 조건:
+    - 용지 = A4(paperSize 9), 가로(landscape).
+    - 캡처 이미지는 가로 A4 인쇄영역(PRINTABLE_W_PX x PRINTABLE_H_PX) 안에 들어오도록
+      비율을 유지한 채 **축소만** 한다(확대 금지) → 잘리지 않는다.
+    - 이미지/텍스트는 인쇄될 A4 의 정중앙(가로·세로)에 온다
+      (모든 시트 print_options.horizontalCentered / verticalCentered = True,
+       print_area 는 내용에 밀착해 셀범위 중점 = 이미지 중점).
 
     items : (이미지경로 | None, 캡션) 리스트. 리스트 순서 = 시트 순서.
             성공 시트는 이미지만(셀 텍스트 없음), 실패 시트(경로 None 또는 파일 없음)는
@@ -813,56 +829,64 @@ def build_result_excel(items, out_path, material, orientation="landscape"):
         raise ValueError("items 가 비어 있어 Excel 을 생성할 수 없습니다.")
 
     _ = material  # 레이아웃 미사용 (의도적으로 유지)
-    TARGET_WIDTH_PX = 1180
     fail_font = Font(bold=True, color="FFFF0000")
 
     wb = Workbook()
 
     for i, (img_path, caption) in enumerate(items):
         ws = wb.active if i == 0 else wb.create_sheet()
-        ws.title = f"{i + 1:02d}"  # "01", "02", ... 캡션/설명은 탭에 넣지 않는다
 
-        # 모든 시트 동일: 가로 A4, 시트 1개 = 물리 페이지 1장 (fitToHeight=1 로 구조적 보장).
+        # --- 전 시트 동일 설정 (이 순서로) ---
+        # 1. 탭 이름
+        ws.title = f"{i + 1:02d}"  # "01", "02", ... 캡션/설명은 탭에 넣지 않는다
+        # 2-3. A4 / 가로
         ws.page_setup.paperSize = 9  # 9 = A4
         ws.page_setup.orientation = orientation
+        # 4. fitToPage 안전망 — 실 프린터 하드마진이 0.5in 를 넘을 때 대비.
+        #    아래에서 이미지를 명시 축소하므로 파일상 보통 no-op 이지만 안전망으로 남긴다.
         ws.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
         ws.page_setup.fitToWidth = 1
         ws.page_setup.fitToHeight = 1
-        ws.page_margins = PageMargins(left=0.5, right=0.5, top=0.5, bottom=0.5,
+        # 5. 여백 (MARGIN_IN 과 일치)
+        ws.page_margins = PageMargins(left=MARGIN_IN, right=MARGIN_IN,
+                                      top=MARGIN_IN, bottom=MARGIN_IN,
                                       header=0.2, footer=0.2)
-        # 헤더/푸터/페이지번호 없음 (기본이 비어 있어도 방어적으로 비운다).
+        # 6. 헤더/푸터/페이지번호 없음 (기본이 비어 있어도 방어적으로 비운다).
         for part in ("oddHeader", "oddFooter", "evenHeader", "evenFooter"):
             hf = getattr(ws, part)
             hf.left.text = ""
             hf.center.text = ""
             hf.right.text = ""
-
-        # 인쇄 시 내용을 A4 페이지 가로·세로 정중앙에 (여백 재분배만 하므로 fitTo 와 충돌 없음).
+        # 7. 인쇄 시 내용을 A4 페이지 가로·세로 정중앙에.
         ws.print_options.horizontalCentered = True
         ws.print_options.verticalCentered = True
 
         if img_path and os.path.exists(img_path):
+            # 8. 이미지: 가로 A4 인쇄영역에 맞춰 비율 유지 축소(확대 금지) 후 A1 앵커.
             try:
                 with PILImage.open(img_path) as im:
                     iw, ih = im.size
             except Exception:
                 iw, ih = 1280, 768
-            if not iw:
+            if not iw or not ih:
                 iw, ih = 1280, 768
+            scale = min(PRINTABLE_W_PX / iw, PRINTABLE_H_PX / ih, 1.0)  # 축소만
             xl_img = XLImage(img_path)
-            xl_img.width = TARGET_WIDTH_PX
-            xl_img.height = int(round(TARGET_WIDTH_PX * ih / iw))
+            xl_img.width = round(iw * scale)
+            xl_img.height = round(ih * scale)
             ws.add_image(xl_img, "A1")
-            # 구버전 Excel 에서도 중앙정렬 기준 범위가 잡히도록 이미지 풋프린트를 print_area 로 명시.
-            # 기본 열폭 ~64px, 기본 행높이 ~20px 기준 + 여유 1.
-            cols = math.ceil(xl_img.width / 64) + 1
-            rows = math.ceil(xl_img.height / 20) + 1
-            ws.print_area = f"A1:{get_column_letter(cols)}{rows}"
+            # 이미지에 밀착한 print_area (여유 없음 → 셀범위 중점 = 이미지 중점).
+            # 기본 열폭 ~64px, 기본 행높이 ~20px.
+            end_col = get_column_letter(math.ceil(xl_img.width / 64))
+            end_row = math.ceil(xl_img.height / 20)
+            ws.print_area = f"A1:{end_col}{end_row}"
         else:
+            # 9. 실패 시트: 오류 텍스트가 예측 가능하게 중앙에 오도록 A1 + print_area="A1".
             cell = ws["A1"]
             cell.value = f"[캡처 실패] {caption}"
             cell.font = fail_font
             cell.alignment = Alignment(horizontal="center", vertical="center")
+            ws.print_area = "A1"
 
     out_dir = os.path.dirname(out_path)
     if out_dir:

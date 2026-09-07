@@ -16,11 +16,32 @@ import re
 import shutil
 import tempfile
 import unittest
+import zipfile
 from unittest import mock
+from xml.etree import ElementTree as ET
 
 from openpyxl import load_workbook
 from openpyxl.utils import column_index_from_string
 from PIL import Image as PILImage
+
+_EMU_PER_PX = 9525  # 96 DPI 기준 (914400 / 96)
+_XDR_NS = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+
+
+def image_ext_px(xlsx_path):
+    """저장된 xlsx 의 유일한 drawing 에서 이미지 앵커 ext(EMU)를 읽어 (px_w, px_h) 반환.
+
+    openpyxl 로 재로드하면 img.width/height 가 원본 native 픽셀로 돌아오므로,
+    실제 시트에 박힌 '스케일된' 크기를 보려면 drawing XML 을 직접 봐야 한다.
+    """
+    with zipfile.ZipFile(xlsx_path) as z:
+        drawings = [n for n in z.namelist()
+                    if n.startswith("xl/drawings/drawing") and n.endswith(".xml")]
+        assert len(drawings) == 1, f"drawing 파일 1개가 아님: {drawings}"
+        root = ET.fromstring(z.read(drawings[0]))
+    ext = root.find(f".//{{{_XDR_NS}}}ext")
+    assert ext is not None, "xdr:ext 를 찾지 못함"
+    return round(int(ext.get("cx")) / _EMU_PER_PX), round(int(ext.get("cy")) / _EMU_PER_PX)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MOD_PATH = os.path.join(HERE, "해석결과 확인_EX.py")
@@ -218,88 +239,140 @@ def _parse_range_end(area):
 
 
 # ---------------------------------------------------------------------------
-# 인쇄 중앙정렬 (A4 정중앙 배치)
+# A4 fit + 인쇄 중앙정렬 (조건 1·2·3)
 # ---------------------------------------------------------------------------
-class PrintCenteringTests(TmpMixin):
+class A4FitCenteringTests(TmpMixin):
     def _jpg(self, name="a.jpg", size=(1280, 768)):
         p = os.path.join(self.tmp, name)
         make_jpg(p, size=size)
         return p
 
-    def _build(self, items, name="out.xlsx"):
+    def _build_path(self, items, name="out.xlsx"):
         out = os.path.join(self.tmp, name)
         mod.build_result_excel(items, out, "STL")
-        return load_workbook(out)
+        return out
 
-    def test_all_sheets_centered_both_axes(self):
+    def _build(self, items, name="out.xlsx"):
+        return load_workbook(self._build_path(items, name))
+
+    @staticmethod
+    def _scale(iw, ih):
+        return min(mod.PRINTABLE_W_PX / iw, mod.PRINTABLE_H_PX / ih, 1.0)
+
+    # (a)(b) 용지/방향
+    def test_a_b_paper_a4_landscape(self):
+        p = self._jpg()
+        wb = self._build([(p, "c0"), (p, "c1"), (None, "실패")])
+        for ws in wb.worksheets:
+            self.assertEqual(int(ws.page_setup.paperSize), 9)
+            self.assertEqual(ws.page_setup.orientation, "landscape")
+
+    # (c) 전 시트 중앙정렬 두 축
+    def test_c_all_sheets_centered_both_axes(self):
         p = self._jpg()
         wb = self._build([(p, "c0"), (p, "c1"), (None, "실패")])
         for ws in wb.worksheets:
             self.assertIs(ws.print_options.horizontalCentered, True)
             self.assertIs(ws.print_options.verticalCentered, True)
 
-    def test_success_sheet_print_area_covers_image(self):
-        p = self._jpg(size=(1280, 768))
-        wb = self._build([(p, "c0")])
-        ws = wb.worksheets[0]
-        self.assertTrue(ws._images)
-        # 풋프린트는 스케일된 이미지 크기(1180px 폭, 1280:768 비율) 기준으로 계산됨.
-        # (재로드된 img.width/height 는 원본 native 1280x768 이라 기준으로 쓰지 않는다.)
-        scaled_w = 1180
-        scaled_h = round(scaled_w * 768 / 1280)  # 708
-        min_cols = math.ceil(scaled_w / 64)      # 19
-        min_rows = math.ceil(scaled_h / 20)      # 36
-        end_col, end_row = _parse_range_end(ws.print_area)
-        self.assertGreaterEqual(end_col, min_cols)
-        self.assertGreaterEqual(end_row, min_rows)
-        self.assertLessEqual(end_col, min_cols + 3)
-        self.assertLessEqual(end_row, min_rows + 3)
-        # 시작이 A1 인지
-        norm = (ws.print_area if isinstance(ws.print_area, str)
-                else ws.print_area[0]).replace("$", "")
-        self.assertIn("A1", norm)
+    # (d) 성공 시트 이미지가 인쇄영역 안 (잘리지 않음)
+    def test_d_image_within_printable_area(self):
+        out = self._build_path([(self._jpg(), "c0")])
+        w, h = image_ext_px(out)
+        self.assertLessEqual(w, mod.PRINTABLE_W_PX)
+        self.assertLessEqual(h, mod.PRINTABLE_H_PX)
 
-    def test_failure_sheet_a1_centered(self):
-        p = self._jpg()
-        cap = "가새 인장력(ENV_STR)"
-        wb = self._build([(p, "ok"), (None, cap)])
-        ws = wb.worksheets[1]
-        self.assertEqual(len(ws._images), 0)
-        self.assertTrue(ws["A1"].value.startswith("[캡처 실패]"))
-        self.assertEqual(ws["A1"].font.color.rgb, "FFFF0000")
-        self.assertEqual(ws["A1"].alignment.horizontal, "center")
-        self.assertEqual(ws["A1"].alignment.vertical, "center")
+    # (e) 명시 스케일 계산 (매직넘버 1180 아님)
+    def test_e_explicit_scale_not_1180(self):
+        out = self._build_path([(self._jpg(size=(1280, 768)), "c0")])
+        w, _ = image_ext_px(out)
+        scale = self._scale(1280, 768)
+        self.assertEqual(w, round(1280 * scale))
+        self.assertNotEqual(w, 1180)
 
-    def test_centering_does_not_break_page_setup(self):
+    # (f) 비율 보존
+    def test_f_aspect_ratio_preserved(self):
+        out = self._build_path([(self._jpg(size=(1280, 768)), "c0")])
+        w, h = image_ext_px(out)
+        self.assertLess(abs(w / h - 1280 / 768), 0.01)
+
+    # (g) 작은 이미지 → 확대 안 함
+    def test_g_small_image_not_upscaled(self):
+        out = self._build_path([(self._jpg(name="s.jpg", size=(200, 120)), "c0")])
+        w, h = image_ext_px(out)
+        self.assertEqual(self._scale(200, 120), 1.0)
+        self.assertEqual(w, 200)
+        self.assertEqual(h, 120)
+
+    # (h) print_area 가 이미지에 밀착 (+1 여유 없음)
+    def test_h_print_area_hugs_image(self):
+        out = self._build_path([(self._jpg(size=(1280, 768)), "c0")])
+        w, h = image_ext_px(out)
+        wb = load_workbook(out)
+        end_col, end_row = _parse_range_end(wb.worksheets[0].print_area)
+        self.assertEqual(end_col, math.ceil(w / 64))
+        self.assertEqual(end_row, math.ceil(h / 20))
+
+    # (i) 여백
+    def test_i_margins(self):
         p = self._jpg()
         wb = self._build([(p, "c0"), (None, "c1")])
         for ws in wb.worksheets:
-            self.assertEqual(int(ws.page_setup.paperSize), 9)
-            self.assertEqual(ws.page_setup.orientation, "landscape")
-            self.assertEqual(int(ws.page_setup.fitToWidth), 1)
-            self.assertEqual(int(ws.page_setup.fitToHeight), 1)
-            self.assertEqual(len(ws.row_breaks), 0)
-        # 성공 시트 셀 텍스트 0 유지
-        vals = [c.value for row in wb.worksheets[0].iter_rows()
-                for c in row if c.value is not None]
-        self.assertEqual(vals, [])
-
-    def test_bytesio_roundtrip_keeps_centered_and_margins(self):
-        p = self._jpg()
-        out = os.path.join(self.tmp, "rt.xlsx")
-        mod.build_result_excel([(p, "c0"), (None, "c1")], out, "STL")
-        with open(out, "rb") as f:
-            buf = io.BytesIO(f.read())
-        wb = load_workbook(buf)
-        for ws in wb.worksheets:
-            self.assertIs(ws.print_options.horizontalCentered, True)
-            self.assertIs(ws.print_options.verticalCentered, True)
             self.assertEqual(ws.page_margins.left, 0.5)
             self.assertEqual(ws.page_margins.right, 0.5)
             self.assertEqual(ws.page_margins.top, 0.5)
             self.assertEqual(ws.page_margins.bottom, 0.5)
             self.assertEqual(ws.page_margins.header, 0.2)
             self.assertEqual(ws.page_margins.footer, 0.2)
+
+    # (j) 시트 수 / 탭 이름
+    def test_j_sheet_count_and_tab_names(self):
+        p = self._jpg()
+        wb = self._build([(p, f"c{i}") for i in range(15)])
+        self.assertEqual(len(wb.worksheets), 15)
+        self.assertEqual([ws.title for ws in wb.worksheets],
+                         [f"{i + 1:02d}" for i in range(15)])
+
+    # (k) 실패 시트
+    def test_k_failure_sheet(self):
+        p = self._jpg()
+        cap = "가새 인장력(ENV_STR)"
+        wb = self._build([(p, "ok"), (None, cap)])
+        ws = wb.worksheets[1]
+        self.assertTrue(ws["A1"].value.startswith("[캡처 실패]"))
+        self.assertEqual(ws["A1"].font.color.rgb, "FFFF0000")
+        self.assertEqual(ws["A1"].alignment.horizontal, "center")
+        self.assertEqual(ws["A1"].alignment.vertical, "center")
+        self.assertEqual(int(ws.page_setup.paperSize), 9)
+        norm = (ws.print_area if isinstance(ws.print_area, str)
+                else ws.print_area[0]).replace("$", "")
+        self.assertTrue(norm.endswith("A1"))
+        end_col, end_row = _parse_range_end(ws.print_area)
+        self.assertEqual((end_col, end_row), (1, 1))
+
+    # 회귀: 중앙정렬이 페이지 구조(빈 페이지 0)와 셀 텍스트 0 을 깨지 않음
+    def test_regression_structure_intact(self):
+        p = self._jpg()
+        wb = self._build([(p, "c0"), (None, "c1")])
+        for ws in wb.worksheets:
+            self.assertEqual(int(ws.page_setup.fitToWidth), 1)
+            self.assertEqual(int(ws.page_setup.fitToHeight), 1)
+            self.assertEqual(len(ws.row_breaks), 0)
+        vals = [c.value for row in wb.worksheets[0].iter_rows()
+                for c in row if c.value is not None]
+        self.assertEqual(vals, [])
+
+    # 회귀: BytesIO 왕복 후 centered + margins 유지
+    def test_regression_bytesio_roundtrip(self):
+        p = self._jpg()
+        out = self._build_path([(p, "c0"), (None, "c1")], "rt.xlsx")
+        with open(out, "rb") as f:
+            wb = load_workbook(io.BytesIO(f.read()))
+        for ws in wb.worksheets:
+            self.assertIs(ws.print_options.horizontalCentered, True)
+            self.assertIs(ws.print_options.verticalCentered, True)
+            self.assertEqual(ws.page_margins.left, 0.5)
+            self.assertEqual(ws.page_margins.header, 0.2)
 
 
 # ---------------------------------------------------------------------------
