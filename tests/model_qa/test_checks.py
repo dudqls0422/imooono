@@ -11,7 +11,8 @@ from tools.model_qa.checks.boundary import (b1_no_supports, b2_global_rigid_body
                                             b3_ghost_supports)
 from tools.model_qa.checks.connectivity import c1_rigid_cycles, c3_dangling_load_refs
 from tools.model_qa.checks.loads import l1_empty_load_cases, l3_case_not_in_combo
-from tools.model_qa.checks.combos import k1_weak_combos, k3_combo_bad_ref
+from tools.model_qa.checks.combos import (k1_weak_combos, k2_wind_seis_not_combined,
+                                          k3_combo_bad_ref)
 
 from .conftest import beam, make_ctx, node
 
@@ -90,6 +91,26 @@ def test_p3_ok():
     assert p3_abnormal_material(ctx) == []
 
 
+def test_p3_db_material_no_density_key_ok():
+    # DB 표준재료: PARAM 에 ELAST 만, DEN/MASS 키 자체가 없음. 자중 활성이어도
+    # 밀도 판정을 하지 않는다(밀도는 재료DB 내부값, API 미노출) → 오탐 없음.
+    ctx = make_ctx(
+        elems={"1": beam(1, 2, matl=1)},
+        matls={"1": {"TYPE": "STEEL", "PARAM": [{"ELAST": 210000000}]}},
+        bodf={"1": {"LCNAME": "D", "FV": [0, 0, -1]}})
+    assert p3_abnormal_material(ctx) == []
+
+
+def test_p3_explicit_zero_density_flagged():
+    # DEN/MASS 키가 실제로 존재하고 0 → 계속 검출
+    ctx = make_ctx(
+        elems={"1": beam(1, 2, matl=1)},
+        matls={"1": {"PARAM": [{"ELAST": 210000000, "DEN": 0, "MASS": 0}]}},
+        bodf={"1": {"LCNAME": "D", "FV": [0, 0, -1]}})
+    f = p3_abnormal_material(ctx)
+    assert f and 1 in f[0].target_ids
+
+
 def test_b1_no_supports():
     ctx = make_ctx(nodes={"1": node(0, 0, 0)})
     f = b1_no_supports(ctx)
@@ -106,6 +127,27 @@ def test_b2_free_dof():
 def test_b2_ok_when_full():
     ctx = make_ctx(nodes={"1": node(0, 0, 0)}, cons=FULL_CONS)
     assert b2_global_rigid_body(ctx) == []
+
+
+def test_b2_pinbase_spread_ok():
+    # 서로 다른 평면 위치의 핀지점(1110000) 4개 + 골조 → 병진구속 커플이
+    # 전역 회전을 저항 → 오류 오탐 없음 (핀베이스는 강구조 표준 관행)
+    nodes = {"1": node(0, 0, 0), "2": node(6, 0, 0), "3": node(6, 6, 0),
+             "4": node(0, 6, 0), "5": node(0, 0, 3), "6": node(6, 0, 3),
+             "7": node(6, 6, 3), "8": node(0, 6, 3)}
+    cons = {str(i): {"ITEMS": [{"CONSTRAINT": "1110000"}]} for i in range(1, 5)}
+    elems = {"1": beam(1, 5), "2": beam(2, 6), "3": beam(3, 7), "4": beam(4, 8),
+             "5": beam(5, 6), "6": beam(6, 7), "7": beam(7, 8), "8": beam(8, 5)}
+    ctx = make_ctx(nodes=nodes, elems=elems, cons=cons)
+    assert all(x.severity != "오류" for x in b2_global_rigid_body(ctx))
+
+
+def test_b2_true_mechanism_error():
+    # 지점 3개가 사실상 한 점(커플 팔 없음) + 회전 미구속 → 오류 유지
+    nodes = {"1": node(0, 0, 0), "2": node(0.0004, 0, 0), "3": node(0, 0.0004, 0)}
+    cons = {str(i): {"ITEMS": [{"CONSTRAINT": "111000"}]} for i in (1, 2, 3)}
+    ctx = make_ctx(nodes=nodes, elems={"1": beam(1, 2)}, cons=cons)
+    assert any(x.severity == "오류" for x in b2_global_rigid_body(ctx))
 
 
 def test_b3_ghost_support():
@@ -145,6 +187,41 @@ def test_l1_empty_case():
                    cnld={"5": {"ITEMS": [{"LCNAME": "DL", "FZ": -1}]}})
     f = l1_empty_load_cases(ctx)
     assert f and f[0].target_ids == [2]
+
+
+def test_l1_auto_seismic_case_not_empty():
+    # EX/EY(TYPE ES)는 db/SSEIS 자동생성분 → 빈 케이스 아님. LL 만 실제 검출.
+    ctx = make_ctx(
+        stld={"1": {"NAME": "DL", "TYPE": "D"}, "2": {"NAME": "LL", "TYPE": "L"},
+              "3": {"NAME": "EX", "TYPE": "ES"}, "4": {"NAME": "EY", "TYPE": "ES"}},
+        cnld={"5": {"ITEMS": [{"LCNAME": "DL", "FZ": -1}]}},
+        sseis={"5": {"PARAMETERS": {"RESPONSE_MOD_FACTOR_X": 3}}})
+    f = l1_empty_load_cases(ctx)
+    assert f and f[0].target_ids == [2]
+
+
+def test_k2_rs_coverage_downgrades_to_info():
+    # ESA EX/EY 는 미사용이지만 RS REX/REY 가 조합에 반영됨 → 경고 아닌 정보
+    ctx = make_ctx(
+        stld={"1": {"NAME": "DL", "TYPE": "D"}, "2": {"NAME": "EX", "TYPE": "ES"},
+              "3": {"NAME": "EY", "TYPE": "ES"}},
+        splc={"1": {"NAME": "REX"}, "2": {"NAME": "REY"}},
+        lcom={"LCOM-GEN": {"1": {"NAME": "C1", "ACTIVE": "ACTIVE", "vCOMB": [
+            {"ANAL": "ST", "LCNAME": "DL", "FACTOR": 1.0},
+            {"ANAL": "ST", "LCNAME": "REX", "FACTOR": 1.0},
+            {"ANAL": "ST", "LCNAME": "REY", "FACTOR": 1.0}]}}})
+    f = k2_wind_seis_not_combined(ctx)
+    assert f and all(x.severity == "정보" for x in f)
+    assert any("EX" in x.description for x in f)
+
+
+def test_k2_no_seismic_in_combo_warns():
+    ctx = make_ctx(
+        stld={"1": {"NAME": "DL", "TYPE": "D"}, "2": {"NAME": "EX", "TYPE": "ES"}},
+        lcom={"LCOM-GEN": {"1": {"NAME": "C1", "ACTIVE": "ACTIVE", "vCOMB": [
+            {"ANAL": "ST", "LCNAME": "DL", "FACTOR": 1.0}]}}})
+    f = k2_wind_seis_not_combined(ctx)
+    assert f and any(x.severity == "경고" for x in f)
 
 
 def test_l3_orphan_case():

@@ -55,30 +55,51 @@ def k1_weak_combos(ctx):
 
 @register("K2", "풍·지진 조합 미포함")
 def k2_wind_seis_not_combined(ctx):
-    if not ctx.stld:
+    """효과 커버리지 기준. 조합에 지진(정적 E-타입 ∪ RS/SPLC) 케이스가
+    하나라도 있으면 지진 하중은 조합에 '반영됨'으로 보고, 개별 미사용
+    케이스(예: ESA EX/EY 를 RS REX/REY 로 대체)는 경고 대신 정보로만 남긴다.
+    풍도 동일. 지진/풍 케이스가 조합에 '전무'일 때만 경고."""
+    if not ctx.stld and not _splc_names(ctx):
         return []
     in_combo = set()
     for s, cid, c in _all_combos(ctx):
         in_combo.update(_combo_lcnames(c))
-    ws_cases = {}
+
+    wind_cases, seis_cases = [], []
     for c in ctx.stld.values():
         t = str(c.get("TYPE", "")).upper()
         nm = str(c.get("NAME", ""))
         if not nm:
             continue
         if t in WIND_TYPES:
-            ws_cases[nm] = "풍"
+            wind_cases.append(nm)
         elif t in SEIS_TYPES:
-            ws_cases[nm] = "지진"
+            seis_cases.append(nm)
     for nm in _splc_names(ctx):
-        ws_cases.setdefault(nm, "응답스펙트럼")
-    missing = sorted(nm for nm in ws_cases if nm not in in_combo)
-    if not missing:
-        return []
-    return [Finding("K2", "풍·지진 조합 미포함", SEVERITY_WARN, "LOADCASE", missing,
-                    "풍/지진 하중케이스가 어떤 하중조합에도 포함되지 않음: "
-                    + ", ".join(f"{n}({ws_cases[n]})" for n in missing),
-                    "풍/지진 케이스를 설계 조합에 반영.")]
+        if nm not in seis_cases:
+            seis_cases.append(nm)
+
+    findings = []
+    for label, cases in (("지진", seis_cases), ("풍", wind_cases)):
+        if not cases:
+            continue
+        covered = sorted({nm for nm in cases if nm in in_combo})
+        missing = sorted({nm for nm in cases if nm not in in_combo})
+        if not missing:
+            continue
+        if covered:
+            findings.append(Finding(
+                "K2", "풍·지진 조합 미포함", SEVERITY_INFO, "LOADCASE", missing,
+                f"미사용 {label} 하중케이스: {', '.join(missing)} — "
+                f"조합에는 다른 {label} 케이스({', '.join(covered)})로 반영됨.",
+                "의도된 미사용이면 무시. 아니면 해당 케이스를 조합에 반영."))
+        else:
+            findings.append(Finding(
+                "K2", "풍·지진 조합 미포함", SEVERITY_WARN, "LOADCASE", missing,
+                f"{label} 하중케이스가 어떤 하중조합에도 포함되지 않음: "
+                + ", ".join(missing),
+                f"{label} 하중을 설계 조합에 반영."))
+    return findings
 
 
 @register("K3", "없는 케이스 참조 조합")

@@ -110,12 +110,9 @@ def extract_seismic(ctx) -> List[Dict]:
     for cid, s in ctx.sseis.items():
         p = s.get("PARAMETERS", {}) or {}
         rx, ry = p.get("RESPONSE_MOD_FACTOR_X"), p.get("RESPONSE_MOD_FACTOR_Y")
+        # 정적(ESA) 지진의 R 은 SSEIS.PARAMETERS.RESPONSE_MOD_FACTOR_X/Y 만 사용한다.
+        # SPFC.VAL.R_ 는 응답스펙트럼(RS) 함수의 R 이므로 정적 행에 붙이지 않는다.
         r_txt = f"X={_num(rx)}, Y={_num(ry)}"
-        for v in ctx.spfc.values():
-            rr = (v.get("VAL", {}) or {}).get("R_")
-            if rr is not None:
-                r_txt += f" (SPFC R_={_num(rr)})"
-                break
         rows.append({
             "케이스ID": cid,
             "케이스명": s.get("DESC") or s.get("SEIS_CODE") or f"SSEIS {cid}",
@@ -144,6 +141,9 @@ def extract_seismic(ctx) -> List[Dict]:
 
     for cid, sp in ctx.splc.items():
         funcs = sp.get("aFUNCNAME", []) or []
+        _ecc = sp.get("ACCECC_PERTCENT")
+        ecc_txt = (_num(_ecc) if sp.get("bACCECC") and _ecc is not None
+                   else "0")
         damp = SRC_UNSUPPORTED
         for fn in funcs:
             f = spfc.get(str(fn))
@@ -166,7 +166,7 @@ def extract_seismic(ctx) -> List[Dict]:
             "중요도계수": _num(val.get("IE")) if val.get("IE") is not None else "-",
             "반응수정계수 R": _num(val.get("R_")) if val.get("R_") is not None else "-",
             "근사주기 T": "-",
-            "우발편심(%)": (f"{_num(sp.get('ACCECC_PERTCENT'))}" if sp.get("bACCECC") else "0"),
+            "우발편심(%)": ecc_txt,
             "응답스펙트럼 함수명": ", ".join(funcs) or "-",
             "감쇠비": damp,
             "적용방향": sp.get("DIR", "-"),

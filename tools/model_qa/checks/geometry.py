@@ -196,8 +196,9 @@ def g7_uncoined_intersections(ctx):
         return []
     ids = sorted({e for pr in hits for e in pr})
     return [Finding("G7", "미접합 교차부재", SEVERITY_INFO, "ELEM", ids,
-                    f"교차점에 절점이 없는 부재 쌍 {len(hits)}건(검토 필요).",
-                    "실제 접합이면 교차점에 절점 추가 후 분할.")]
+                    f"교차점에 절점이 없는 부재 쌍 {len(hits)}건 — 가새 X자 교차 등 "
+                    "표준 모델링일 수 있음(검토 권장).",
+                    "실제 접합이면 교차점에 절점 추가 후 분할. 가새 교차면 정상.")]
 
 
 def _segment_intersection(a1, d1, a2, d2, tol):

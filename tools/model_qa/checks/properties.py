@@ -34,19 +34,25 @@ def p2_section_missing(ctx):
 
 
 def _matl_e_and_density(m):
+    """(E, DEN, MASS, has_density_key) — DB 표준재료는 PARAM 에 DEN/MASS 키
+    자체가 없다(밀도는 재료DB 내부값, API 미노출). 키 부재를 값 0 으로
+    오인하지 않도록 키 존재 여부를 함께 반환한다."""
     params = m.get("PARAM")
     rows = params if isinstance(params, list) else ([params] if params else [])
     e = den = mass = None
+    has_density_key = False
     for r in rows:
         if not isinstance(r, dict):
             continue
         if r.get("ELAST") is not None:
             e = r.get("ELAST")
-        if r.get("DEN") is not None:
+        if "DEN" in r:
+            has_density_key = True
             den = r.get("DEN")
-        if r.get("MASS") is not None:
+        if "MASS" in r:
+            has_density_key = True
             mass = r.get("MASS")
-    return e, den, mass
+    return e, den, mass, has_density_key
 
 
 @register("P3", "비정상 물성")
@@ -60,14 +66,15 @@ def p3_abnormal_material(ctx):
     for mid, m in ctx.matls.items():
         if str(mid) not in used_matls:
             continue
-        e, den, mass = _matl_e_and_density(m)
+        e, den, mass, has_density_key = _matl_e_and_density(m)
         try:
             if e is not None and float(e) <= 0:
                 bad.append(int(mid))
                 continue
         except (TypeError, ValueError):
             pass
-        if uses_selfweight:
+        # 밀도 0 판정은 DEN/MASS 키가 실제로 있을 때만 (DB 표준재료는 skip).
+        if uses_selfweight and has_density_key:
             d = 0.0
             for v in (den, mass):
                 try:
@@ -79,5 +86,6 @@ def p3_abnormal_material(ctx):
     if not bad:
         return []
     return [Finding("P3", "비정상 물성", SEVERITY_ERROR, "MODEL", sorted(set(bad)),
-                    f"E ≤ 0 이거나, 자중 케이스가 있는데 밀도/단위중량이 0인 재료 {len(set(bad))}개.",
+                    f"E ≤ 0 이거나, 자중 케이스가 있는데 DEN/MASS 가 명시적으로 0인 재료 "
+                    f"{len(set(bad))}개. (밀도 미노출 DB 표준재료는 제외.)",
                     "재료 물성(탄성계수·밀도) 확인.")]
