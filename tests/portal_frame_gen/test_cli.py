@@ -1,16 +1,17 @@
 """CLI: --make-template, --dry-run(네트워크 0), 종료코드 0/4/5."""
 from __future__ import annotations
 
-from tools.portal_frame_gen import cli
-from tools.portal_frame_gen.template import read_template, write_template
+from openpyxl import load_workbook
 
-from .conftest import FakeResp
+from tools.portal_frame_gen import cli
+from tools.portal_frame_gen.template import SHEET_NAME
+
+from .conftest import FakeResp, make_form
 
 
 def _template(tmp_path):
-    f = tmp_path / "in.xlsx"
-    write_template(str(f))
-    return str(f)
+    """예시값이 입력칸에 기입된 폼 템플릿 경로."""
+    return make_form(tmp_path)
 
 
 class _NoNetClient:
@@ -61,7 +62,12 @@ def test_make_template(tmp_path):
     out = tmp_path / "tmpl.xlsx"
     assert cli.main(["--make-template", str(out)]) == 0
     assert out.exists()
-    assert read_template(str(out)).span_m == 20.0
+    wb = load_workbook(str(out))
+    assert wb.sheetnames == [SHEET_NAME]
+    assert len(list(wb.defined_names)) == 11
+    # 입력칸(F 열)은 비어 있어야 함
+    ws = wb[SHEET_NAME]
+    assert ws["F5"].value is None and ws["F23"].value is None
 
 
 def test_dry_run_makes_no_network_calls(tmp_path, monkeypatch):

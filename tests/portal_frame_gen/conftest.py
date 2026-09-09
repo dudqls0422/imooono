@@ -4,8 +4,12 @@ from __future__ import annotations
 import json
 
 import pytest
+from openpyxl import load_workbook
 
-from tools.portal_frame_gen.template import TemplateParams
+from tools.portal_frame_gen.template import (EXAMPLE_VALUES, FIELDS,
+                                             TemplateParams, write_template)
+
+_SKIP = object()
 
 
 def make_params(**over) -> TemplateParams:
@@ -18,6 +22,30 @@ def make_params(**over) -> TemplateParams:
     )
     base.update(over)
     return TemplateParams(**base)
+
+
+def make_form(tmp_path, name="in.xlsx", drop_names=(), **overrides) -> str:
+    """폼 템플릿 생성 후 입력 셀(F 열)에 예시값(+오버라이드) 기입.
+
+    override 값이 ``None`` 이면 그 셀을 비운다. ``drop_names`` 의 정의된
+    이름은 삭제(고정셀 폴백 테스트용). 반환: 파일 경로 문자열.
+    """
+    path = tmp_path / name
+    write_template(str(path))
+    wb = load_workbook(str(path))
+    ws = wb[wb.sheetnames[0]]
+    vals = dict(EXAMPLE_VALUES)
+    vals.update(overrides)
+    for key, (row, col, _dn) in FIELDS.items():
+        v = vals.get(key, _SKIP)
+        if v is _SKIP:
+            continue
+        ws.cell(row=row, column=col, value=v)
+    for dn in drop_names:
+        if dn in wb.defined_names:
+            del wb.defined_names[dn]
+    wb.save(str(path))
+    return str(path)
 
 
 @pytest.fixture
