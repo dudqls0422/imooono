@@ -1,2 +1,7 @@
 # oh-my-claudecode local state
 .omc/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
