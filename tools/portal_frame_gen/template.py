@@ -1,37 +1,100 @@
-"""Excel 템플릿 읽기 + 검증 + 빈 양식 생성(``--make-template``).
+"""Excel 입력 폼 읽기 + 검증 + 폼 생성(``--make-template``).
 
-레이아웃: 단일 시트, 1행 = 헤더명, 2행 = 예시(또는 사용자 입력) 1행,
-3행 이후 `#` 로 시작하면 주석으로 무시. 리더는 첫 데이터 행(2행)을 읽는다.
+레이아웃은 표가 아니라 **폼(모눈 스타일)**: 시트 ``입력``, 제목 바, 섹션 5개
+([1.형상]→[2.프레임 모드]→[3.재료]→[4.단면]→[5.지점]), 필드마다 라벨 박스 +
+입력 박스(비어 있음) + 예시 열(회색 이탤릭).
 
-단면·재료명은 **MIDAS DB(현재 모델)에 이미 정의돼 있어야 한다** — 이 도구는
+단일 출처: ``FIELDS`` dict (key → (row, col, defined_name)). 생성기·파서·
+테스트 픽스처가 전부 여기서 파생된다. 좌표를 바꾸면 이 dict 만 고치고
+생성기·파서·테스트를 함께 갱신한다.
+
+파서는 값을 먼저 **정의된 이름**으로 찾고, 없으면 ``FIELDS`` 의 고정 셀로
+폴백(warning)하며, 둘 다 비어 있으면 필드명·셀 주소를 담아 오류.
+
+재료·단면명은 **MIDAS DB(현재 모델)에 이미 정의돼 있어야 한다** — 이 도구는
 만들지 않고 이름으로 기존 id 를 찾는다(``resolver``).
 """
 from __future__ import annotations
 
 import math
+import warnings
 from dataclasses import dataclass, field
 from typing import List, Optional
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.comments import Comment
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
+from openpyxl.workbook.defined_name import DefinedName
+from openpyxl.worksheet.datavalidation import DataValidation
+from openpyxl.worksheet.properties import PageSetupProperties
 
-HEADERS = [
-    "span_m", "eave_height_m", "pitch_rise", "pitch_run", "roof_angle_deg",
-    "bay_count", "bay_spacing_m", "base_level_m",
-    "column_section", "rafter_section", "eave_strut_section",
-    "material_name", "base_fixity", "frame_mode",
+# ==========================================================================
+# 단일 출처 — 필드 좌표 + 정의된 이름 (col: A=1, F=6)
+# ==========================================================================
+SHEET_NAME = "입력"
+FIELDS = {
+    "span":           (5, 6, "span"),
+    "eave_height":    (6, 6, "eave_height"),
+    "roof_pitch":     (7, 6, "roof_pitch"),
+    "bays":           (8, 6, "bays"),
+    "bay_spacing":    (9, 6, "bay_spacing"),
+    "frame_mode":     (12, 6, "frame_mode"),
+    "material":       (15, 6, "material"),
+    "sec_column":     (18, 6, "sec_column"),
+    "sec_rafter":     (19, 6, "sec_rafter"),
+    "sec_eave_strut": (20, 6, "sec_eave_strut"),
+    "support":        (23, 6, "support"),
+}
+
+# 예시값 (입력 박스가 아니라 별도 예시 열에 표기)
+EXAMPLE_VALUES = {
+    "span": 28, "eave_height": 6, "roof_pitch": 0.15, "bays": 5,
+    "bay_spacing": 6, "frame_mode": "3D", "material": "SS275",
+    "sec_column": "H-400x200x8x13", "sec_rafter": "H-350x175x7x11",
+    "sec_eave_strut": "H-200x100x5.5x8", "support": "pinned",
+}
+
+_LABEL = {
+    "span": "스팬 (m)",
+    "eave_height": "처마고 (m)",
+    "roof_pitch": "지붕물매 (rise:run)",
+    "bays": "베이 수",
+    "bay_spacing": "베이 간격 (m)",
+    "frame_mode": "프레임 모드",
+    "material": "재료명",
+    "sec_column": "기둥 단면명",
+    "sec_rafter": "rafter 단면명",
+    "sec_eave_strut": "이브 스트럿 단면명 (3D 전용)",
+    "support": "지점 조건",
+}
+
+_COMMENT = {
+    "span": "m, 기둥 중심선 간 거리",
+    "eave_height": "m, 지점 레벨에서 이브(기둥·rafter 교점)까지 수직높이. 처마 끝 아님",
+    "roof_pitch": "rise/run. 0.15 또는 3:12 / 3/12. 각도 아님. (0.15 = 1.5:10)",
+    "bays": "정수 ≥ 1",
+    "bay_spacing": "m, 프레임 간 거리",
+    "frame_mode": "2D 또는 3D 만",
+    "material": "MIDAS 재료 DB에 이미 존재해야 함. 정확히 일치",
+    "sec_column": "MIDAS 단면 DB에 이미 존재해야 함. 대소문자·공백 정확히 일치",
+    "sec_rafter": "MIDAS 단면 DB에 이미 존재해야 함. 대소문자·공백 정확히 일치",
+    "sec_eave_strut": "3D 전용 — 2D에서는 무시됨",
+    "support": "pinned 또는 fixed 만",
+}
+
+# (헤더 행, 제목)
+_SECTIONS = [
+    (4, "[1. 형상]"),
+    (11, "[2. 프레임 모드]"),
+    (14, "[3. 재료 — MIDAS DB에 미리 정의]"),
+    (17, "[4. 단면 — MIDAS DB에 미리 정의]"),
+    (22, "[5. 지점]"),
 ]
 
-_EXAMPLE_ROW = [
-    20.0, 6.0, 1.0, 10.0, None,
-    5, 6.0, 0.0,
-    "H-400x200x8x13", "H-350x175x7x11", "H-200x100x5.5x8",
-    "SS275", "pinned", "3D",
-]
-
-_NOTE = ("# 단면명(column/rafter/eave_strut)과 material_name 은 MIDAS 현재 모델에 "
-         "이미 정의돼 있어야 함. roof_angle_deg 를 채우면 pitch_rise/run 대신 사용. "
-         "frame_mode=2D 면 bay_* 무시. base_fixity: pinned|fixed.")
+_GRID_COLS = 14          # A..N
+_GRID_WIDTH = 3.4
+_EXAMPLE_COL = 10        # J
 
 _FIXITY = {"pinned", "fixed"}
 _MODE = {"2D", "3D"}
@@ -57,7 +120,7 @@ class TemplateParams:
     base_level_m: float
     column_section: str
     rafter_section: str
-    eave_strut_section: str
+    eave_strut_section: Optional[str]
     material_name: str
     base_fixity: str
     frame_mode: str
@@ -69,9 +132,9 @@ class TemplateParams:
         return math.degrees(math.atan2(self.pitch_rise, self.pitch_run))
 
 
-# --------------------------------------------------------------------------
-# 읽기
-# --------------------------------------------------------------------------
+# ==========================================================================
+# 변환 헬퍼
+# ==========================================================================
 def _to_float(v, name):
     if v is None or v == "":
         raise TemplateError(f"'{name}' 값이 비어 있음")
@@ -81,13 +144,11 @@ def _to_float(v, name):
         raise TemplateError(f"'{name}' 값이 숫자가 아님: {v!r}")
 
 
-def _opt_float(v):
-    if v is None or v == "":
-        return None
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return None
+def _to_int(v, name):
+    fv = _to_float(v, name)
+    if fv != int(fv):
+        raise TemplateError(f"'{name}' 는 정수여야 함: {v!r}")
+    return int(fv)
 
 
 def _to_str(v, name):
@@ -97,79 +158,104 @@ def _to_str(v, name):
     return s
 
 
-def _parse_bay_spacing(raw, bay_count):
-    """스칼라 또는 콤마 리스트. 리스트면 길이==bay_count 이고 균일해야 함."""
-    if isinstance(raw, str) and "," in raw:
-        parts = [p.strip() for p in raw.split(",") if p.strip()]
-        if len(parts) != bay_count:
-            raise TemplateError(
-                f"bay_spacing_m 리스트 길이({len(parts)})가 bay_count({bay_count})와 다름")
+def _parse_pitch(v):
+    """rise:run / rise/run 비율 문자열 또는 십진 slope → slope(float)."""
+    if isinstance(v, str) and (":" in v or "/" in v):
+        sep = ":" if ":" in v else "/"
+        a, _, b = v.partition(sep)
         try:
-            vals = [float(p) for p in parts]
-        except ValueError:
-            raise TemplateError(f"bay_spacing_m 리스트에 숫자가 아닌 값: {raw!r}")
-        if max(vals) - min(vals) > 1e-9:
-            raise TemplateError("가변 베이 간격은 미지원 — 균일 간격(스칼라)만 허용")
-        return vals[0]
-    return _to_float(raw, "bay_spacing_m")
+            slope = float(a.strip()) / float(b.strip())
+        except (ValueError, ZeroDivisionError):
+            raise TemplateError(f"'roof_pitch' rise:run 파싱 실패: {v!r}")
+    else:
+        try:
+            slope = float(v)
+        except (TypeError, ValueError):
+            raise TemplateError(f"'roof_pitch' 값이 숫자/비율이 아님: {v!r}")
+    if slope <= 0:
+        raise TemplateError(f"'roof_pitch' 는 0 보다 커야 함 (slope={slope})")
+    return slope
+
+
+# ==========================================================================
+# 읽기 — 정의된 이름 우선, 고정 셀 폴백
+# ==========================================================================
+def _from_defined_name(wb, dn):
+    d = wb.defined_names.get(dn)
+    if d is None:
+        return None, False
+    dests = list(d.destinations)
+    if not dests:
+        return None, False
+    sheet, coord = dests[0]
+    try:
+        return wb[sheet][coord].value, True
+    except KeyError:
+        return None, False
+
+
+def _raw(wb, ws, key, *, required=True):
+    row, col, dn = FIELDS[key]
+    a1 = f"{get_column_letter(col)}{row}"
+    val, ok = _from_defined_name(wb, dn)
+    if not ok:
+        val = ws.cell(row=row, column=col).value
+        warnings.warn(
+            f"'{key}': 정의된 이름 '{dn}' 없음 — 대체 셀 {SHEET_NAME}!{a1} 사용",
+            stacklevel=3)
+    if val is None or (isinstance(val, str) and val.strip() == ""):
+        if not required:
+            return None
+        raise TemplateError(
+            f"'{key}' 입력값 없음 (정의된 이름 '{dn}' 없음/빈값, "
+            f"대체 셀 {a1} 비어 있음)")
+    return val
 
 
 def read_template(path: str) -> TemplateParams:
     wb = load_workbook(path, data_only=True)
-    ws = wb.active
-    rows = list(ws.iter_rows(values_only=True))
-    if len(rows) < 2:
-        raise TemplateError("템플릿에 데이터 행이 없음 (헤더 + 최소 1행 필요)")
-    header = [str(c).strip() if c is not None else "" for c in rows[0]]
-    idx = {h: i for i, h in enumerate(header)}
-    missing_cols = [h for h in HEADERS if h not in idx]
-    if missing_cols:
-        raise TemplateError(f"템플릿 헤더 누락: {', '.join(missing_cols)}")
+    ws = wb[SHEET_NAME] if SHEET_NAME in wb.sheetnames else wb.active
 
-    data_row = None
-    for r in rows[1:]:
-        first = r[0] if r else None
-        if first is None or str(first).strip() == "":
-            continue
-        if str(first).strip().startswith("#"):
-            continue
-        data_row = r
-        break
-    if data_row is None:
-        raise TemplateError("템플릿에 유효한 데이터 행이 없음")
+    def f(key, **kw):
+        return _raw(wb, ws, key, **kw)
 
-    def cell(name):
-        i = idx[name]
-        return data_row[i] if i < len(data_row) else None
+    frame_mode = str(f("frame_mode")).strip().upper()
+    if frame_mode not in _MODE:
+        raise TemplateError(f"'frame_mode' 값은 2D|3D 여야 함: {frame_mode!r}")
+    support = str(f("support")).strip().lower()
+    if support not in _FIXITY:
+        raise TemplateError(f"'support' 값은 pinned|fixed 여야 함: {support!r}")
 
-    bay_count = _to_float(cell("bay_count"), "bay_count")
-    if bay_count != int(bay_count):
-        raise TemplateError(f"bay_count 는 정수여야 함: {bay_count}")
-    bay_count = int(bay_count)
+    slope = _parse_pitch(f("roof_pitch"))
+
+    if frame_mode == "3D":
+        eave_strut = _to_str(f("sec_eave_strut"), "sec_eave_strut")
+    else:
+        raw_es = f("sec_eave_strut", required=False)
+        eave_strut = (str(raw_es).strip()
+                      if raw_es not in (None, "") else None)
 
     params = TemplateParams(
-        span_m=_to_float(cell("span_m"), "span_m"),
-        eave_height_m=_to_float(cell("eave_height_m"), "eave_height_m"),
-        pitch_rise=_to_float(cell("pitch_rise"), "pitch_rise"),
-        pitch_run=_to_float(cell("pitch_run"), "pitch_run"),
-        roof_angle_deg=_opt_float(cell("roof_angle_deg")),
-        bay_count=bay_count,
-        bay_spacing_m=_parse_bay_spacing(cell("bay_spacing_m"), bay_count),
-        base_level_m=_to_float(cell("base_level_m"), "base_level_m"),
-        column_section=_to_str(cell("column_section"), "column_section"),
-        rafter_section=_to_str(cell("rafter_section"), "rafter_section"),
-        eave_strut_section=_to_str(cell("eave_strut_section"), "eave_strut_section"),
-        material_name=_to_str(cell("material_name"), "material_name"),
-        base_fixity=str(cell("base_fixity") or "").strip().lower(),
-        frame_mode=str(cell("frame_mode") or "").strip().upper(),
+        span_m=_to_float(f("span"), "span"),
+        eave_height_m=_to_float(f("eave_height"), "eave_height"),
+        pitch_rise=slope, pitch_run=1.0, roof_angle_deg=None,
+        bay_count=_to_int(f("bays"), "bays"),
+        bay_spacing_m=_to_float(f("bay_spacing"), "bay_spacing"),
+        base_level_m=0.0,
+        column_section=_to_str(f("sec_column"), "sec_column"),
+        rafter_section=_to_str(f("sec_rafter"), "sec_rafter"),
+        eave_strut_section=eave_strut,
+        material_name=_to_str(f("material"), "material"),
+        base_fixity=support,
+        frame_mode=frame_mode,
     )
     validate(params)
     return params
 
 
-# --------------------------------------------------------------------------
-# 검증
-# --------------------------------------------------------------------------
+# ==========================================================================
+# 검증 (기능·규칙 무변경)
+# ==========================================================================
 def validate(p: TemplateParams) -> TemplateParams:
     if p.span_m <= 0:
         raise TemplateError(f"span_m 은 0 보다 커야 함: {p.span_m}")
@@ -210,21 +296,98 @@ def validate(p: TemplateParams) -> TemplateParams:
     return p
 
 
-# --------------------------------------------------------------------------
-# 빈 양식 생성
-# --------------------------------------------------------------------------
+# ==========================================================================
+# 폼 생성 (--make-template)
+# ==========================================================================
+_TITLE_FILL = PatternFill("solid", fgColor="1F4E78")
+_TITLE_FONT = Font(bold=True, color="FFFFFF", size=12)
+_SEC_FILL = PatternFill("solid", fgColor="D9E2F3")
+_SEC_FONT = Font(bold=True, size=10)
+_LABEL_FILL = PatternFill("solid", fgColor="F2F2F2")
+_LABEL_FONT = Font(bold=True, size=10)
+_INPUT_FILL = PatternFill("solid", fgColor="FFFFFF")
+_GREY_FILL = PatternFill("solid", fgColor="E8E8E8")
+_EX_FONT = Font(italic=True, color="808080", size=9)
+_THIN = Side(style="thin", color="AAAAAA")
+_BOX = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
+_MID = Alignment(horizontal="left", vertical="center")
+
+
+def _sheet_ref(row, col):
+    return f"'{SHEET_NAME}'!${get_column_letter(col)}${row}"
+
+
 def write_template(path: str) -> None:
     wb = Workbook()
     ws = wb.active
-    ws.title = "portal_frame"
-    ws.append(HEADERS)
-    ws.append(_EXAMPLE_ROW)
-    ws.append([_NOTE])
-    for name in ("column_section", "rafter_section", "eave_strut_section",
-                 "material_name"):
-        col = HEADERS.index(name) + 1
-        ws.cell(row=1, column=col).comment = Comment(
-            "MIDAS 현재 모델에 이미 정의된 이름이어야 함", "portal_frame_gen")
-    for i, _h in enumerate(HEADERS, start=1):
-        ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = 16
+    ws.title = SHEET_NAME
+
+    for c in range(1, _GRID_COLS + 1):
+        ws.column_dimensions[get_column_letter(c)].width = _GRID_WIDTH
+
+    # 제목 바 A1:N2
+    ws.merge_cells(start_row=1, start_column=1, end_row=2, end_column=_GRID_COLS)
+    t = ws.cell(row=1, column=1,
+                value="포탈 프레임 모델 생성 입력 시트   (단위: m, kN)")
+    t.font = _TITLE_FONT
+    t.alignment = Alignment(horizontal="center", vertical="center")
+    for r in (1, 2):
+        for c in range(1, _GRID_COLS + 1):
+            ws.cell(row=r, column=c).fill = _TITLE_FILL
+
+    # 예시 열 헤더
+    eh = ws.cell(row=4, column=_EXAMPLE_COL, value="예시")
+    eh.font = _EX_FONT
+
+    # 섹션 헤더 바 (A:N)
+    for row, title in _SECTIONS:
+        ws.merge_cells(start_row=row, start_column=1,
+                       end_row=row, end_column=_GRID_COLS)
+        s = ws.cell(row=row, column=1, value=title)
+        s.font = _SEC_FONT
+        for c in range(1, _GRID_COLS + 1):
+            ws.cell(row=row, column=c).fill = _SEC_FILL
+
+    # 필드 행: 라벨 박스(A:D) + 입력 박스(F, 단일) + 예시(J) + 정의된 이름
+    for key, (row, col, dn) in FIELDS.items():
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
+        lab = ws.cell(row=row, column=1, value=_LABEL[key])
+        lab.font = _LABEL_FONT
+        lab.fill = _LABEL_FILL
+        lab.alignment = _MID
+        for c in range(1, 5):
+            ws.cell(row=row, column=c).border = _BOX
+
+        inp = ws.cell(row=row, column=col)
+        inp.border = _BOX
+        inp.fill = _GREY_FILL if key == "sec_eave_strut" else _INPUT_FILL
+        inp.alignment = _MID
+        cm = Comment(_COMMENT[key], "portal_frame_gen")
+        cm.width, cm.height = 220, 100
+        inp.comment = cm
+
+        ex = ws.cell(row=row, column=_EXAMPLE_COL, value=EXAMPLE_VALUES[key])
+        ex.font = _EX_FONT
+
+        wb.defined_names[dn] = DefinedName(dn, attr_text=_sheet_ref(row, col))
+
+    # 데이터 유효성 (드롭다운 — 자문용, 파서가 별도 재검증)
+    dv_mode = DataValidation(type="list", formula1='"2D,3D"', allow_blank=True)
+    dv_sup = DataValidation(type="list", formula1='"pinned,fixed"',
+                            allow_blank=True)
+    ws.add_data_validation(dv_mode)
+    ws.add_data_validation(dv_sup)
+    dv_mode.add(ws.cell(row=FIELDS["frame_mode"][0],
+                        column=FIELDS["frame_mode"][1]))
+    dv_sup.add(ws.cell(row=FIELDS["support"][0], column=FIELDS["support"][1]))
+
+    # 페이지 설정
+    last_row = FIELDS["support"][0] + 1
+    ws.print_area = f"A1:{get_column_letter(_GRID_COLS)}{last_row}"
+    ws.freeze_panes = "A4"
+    ws.page_setup.orientation = "portrait"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
+
     wb.save(path)
