@@ -88,3 +88,25 @@ def test_write_model_partial_failure_reports_done():
         write_model(c, m, _RESOLVED, log=_quiet)
     assert ei.value.step == "ELEM"
     assert ei.value.done == ["NODE"]
+
+
+def test_write_model_200_with_message_is_failure():
+    """MIDAS 가 200 + {"message":"Invalid..."} 로 실패를 줄 수 있음 — 삼키면 안 됨."""
+    m = build_model(make_params(frame_mode="2D"))
+    c = FakeClient(put_map={"db/NODE": FakeResp(
+        200, {"message": "Invalid node data"})})
+    with pytest.raises(WriteFailed) as ei:
+        write_model(c, m, _RESOLVED, log=_quiet)
+    assert ei.value.step == "NODE" and ei.value.done == []
+
+
+def test_write_model_echoed_collection_key_is_success():
+    m = build_model(make_params(frame_mode="2D"))
+    c = FakeClient(put_map={
+        "db/NODE": FakeResp(200, {"NODE": {"1": {"X": 0}}}),
+        "db/ELEM": FakeResp(200, {"ELEM": {}}),
+        "db/CONS": FakeResp(200, {"CONS": {}}),
+        "db/GRUP": FakeResp(200, {"GRUP": {}}),
+    })
+    out = write_model(c, m, _RESOLVED, log=_quiet)
+    assert out["done"] == ["NODE", "ELEM", "CONS", "GRUP"]

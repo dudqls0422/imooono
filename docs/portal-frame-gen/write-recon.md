@@ -107,16 +107,22 @@
 | 바디 | `{"Assign": {"1": {"NAME": "Columns_", "P_TYPE": 0, "N_LIST": [1, 2], "E_LIST": [1, 2]}}}` |
 | 필드 | `NAME`(String), `P_TYPE`(Integer, 보통 0), `N_LIST`(Array[Integer]), `E_LIST`(Array[Integer]) |
 
-## 7. 생성 순서 (권장, 태스크 2)
+## 7. 생성 순서 (태스크 2 구현)
 
-1. `PUT db/UNIT` — kN, m
-2. `GET db/MATL` → 템플릿 재료명으로 **기존 id 확보** (없으면 중단)
-3. `GET db/SECT` → 템플릿 기둥/보 단면명으로 **기존 id 확보** (없으면 중단)
-4. `PUT db/NODE` — 기둥 하단 2점 + 처마 2점 (+ 게이블이면 용마루 1점)
-5. `PUT db/ELEM` — 기둥 2 + 보 2 (`TYPE:"BEAM"`, `MATL`/`SECT` = 2·3 에서 얻은 id, `NODE:[i,j]`)
-6. `PUT db/CONS` — 기둥 하단 2절점 (핀 `"1110000"` 또는 고정 `"1111110"`)
-7. (선택) `PUT db/GRUP` — `Columns_` / `Rafters_`
-8. 각 단계 `GET` 왕복 검증
+**첫 쓰기 전에 GET 만으로 되는 전제조건을 모두 통과해야 한다** — 빈 모델 가드는
+"생략 불가"이므로 비어있지 않은 모델에는 단위계조차 쓰지 않는다.
+
+1. `GET db/MATL` → 템플릿 재료명으로 **기존 id 확보** (없으면 중단, exit 5)
+2. `GET db/SECT` → 템플릿 단면명으로 **기존 id 확보** (없으면 중단, exit 5)
+3. `GET db/NODE` + `GET db/ELEM` — **빈 모델 가드**. 데이터가 있으면 중단(exit 4),
+   `--force` 만 우회.
+4. `PUT db/UNIT` — kN, m. **첫 쓰기이자 PUT verb 지원 프로브**. 405/401/403/
+   "not supported" 면 즉시 중단(exit 2).
+5. `PUT db/NODE` — 프레임별 5노드 벌크
+6. `PUT db/ELEM` — 기둥·rafter·이브스트럿 (`TYPE:"BEAM"`, `MATL`/`SECT` = 1·2 의 id)
+7. `PUT db/CONS` — 베이스 노드 (핀 `"1110000"` 또는 고정 `"1111110"`)
+8. (기본 on) `PUT db/GRUP` — `COLUMN` / `RAFTER` (/ `EAVE_STRUT` 3D)
+9. (`--verify`) 각 리소스 `GET` 왕복으로 계산 모델과 대조
 
 ## 8. 라이브 쓰기 미검증 경계 (Main 지시: 라이브 정찰/빈 모델 준비 안 함)
 
@@ -127,11 +133,14 @@
 > 실제 동작은 라이브에서만 확정된다.
 
 1. **첫 쓰기 = `PUT db/UNIT`** — 임시 노드 프로브(id 9001 PUT→GET→DELETE) **안 함**.
+   단, **빈 모델 가드·이름→id 해석(모두 GET)을 먼저 통과한 뒤에만** 실행한다
+   (비어있지 않은 모델엔 단위계도 쓰지 않음 — QA PR #9 1차 반려 반영).
    `PUT db/UNIT` 응답이 405/401/403 또는 "not supported" 면 **즉시 중단**
    (exit 2, "라이브 쓰기 미지원 가능성 — Main 보고 필요"), 이후 쓰기 없음.
-2. **응답 파싱은 성공·에러 두 형태 모두 방어적으로**:
-   - 성공: `{"NODE": {...}}` 류 봉투 또는 200 무바디.
-   - 에러: `{"error": {"code", "message"}}` 또는 `{"message": "..."}`.
+2. **쓰기 성공 판정은 명시적 형태를 요구**:
+   - 성공: 200 무바디, 또는 에코된 컬렉션 키(`{"NODE": {...}}` 등), 또는 `Assign` 에코.
+   - 실패: `{"error": {"code", "message"}}`, 또는 2xx 라도 컬렉션 키 없이
+     `{"message": "..."}` 만 온 경우(200 + `{"message":"Invalid..."}` 를 삼키지 않음).
    - 첫 실패에서 중단, 성공한 step·id 범위 보고 (exit 3).
 3. **ID 지정 존중** — `Assign` 키로 준 ID 가 그대로 들어가는지(자동 재채번 아님). 라이브 미검증.
 4. **POST vs PUT 의미** — 관례상 `PUT`=지정 ID upsert, `POST`=일괄 생성. catalog 에 구분 텍스트 없음.

@@ -1,8 +1,9 @@
 """``python -m tools.portal_frame_gen`` 진입점.
 
 흐름: 템플릿 읽기 → 형상 생성 → (dry-run 이면 출력 후 종료) →
-PUT db/UNIT → 이름→id 해석 → 빈 모델 가드 → NODE/ELEM/CONS/GRUP PUT →
-(선택) 읽기대조.
+이름→id 해석(GET) → 빈 모델 가드(GET) → PUT db/UNIT(첫 쓰기·verb 프로브) →
+NODE/ELEM/CONS/GRUP PUT → (선택) 읽기대조.
+쓰기는 가드를 통과한 뒤에만 시작한다 — 비어있지 않은 모델엔 단위계도 안 씀.
 
 라이브 쓰기 미검증: catalog 스키마 기반 구현. 실제 MIDAS 쓰기 왕복은 QA
 단계 또는 사용자가 빈 모델로 실행할 때 확인 필요. db/SWIND 전례처럼
@@ -136,9 +137,12 @@ def main(argv=None) -> int:
         section_names.append(params.eave_strut_section)
 
     try:
-        put_unit(client)
+        # 첫 쓰기(PUT db/UNIT) 전에 GET 만으로 되는 전제조건을 모두 확인한다.
+        # 빈 모델 가드는 "생략 불가" — 비어있지 않은 모델에 단위계조차 쓰면 안 됨.
         resolved = resolve_ids(client, params.material_name, section_names)
         empty_model_guard(client, force=args.force)
+        # 이제부터 쓰기. PUT db/UNIT 이 첫 쓰기이자 verb 지원 프로브 역할.
+        put_unit(client)
         summary = write_model(client, model, resolved, no_groups=args.no_groups)
     except LiveWriteUnsupported as e:
         print(f"[중단] {e}", file=sys.stderr)

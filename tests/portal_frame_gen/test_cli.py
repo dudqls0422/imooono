@@ -33,7 +33,8 @@ def _fake_client_cls(get_map, put_map=None):
         def put(self, path, body):
             self.puts.append((path, body))
             self.request_log.append(("PUT", path, 200))
-            return self._put_map.get(path, FakeResp(200, {"ok": {}}))
+            key = path.rsplit("/", 1)[-1]
+            return self._put_map.get(path, FakeResp(200, {key: {}}))
 
         def delete(self, path):
             self.request_log.append(("DELETE", path, 200))
@@ -84,20 +85,38 @@ def test_success_flow_get_and_put_only(tmp_path, monkeypatch):
     assert [p for p, _b in holder["c"].puts][0] == "db/UNIT"
 
 
+def _hold(monkeypatch, gm):
+    holder = {}
+    cls = _fake_client_cls(gm)
+
+    def _factory(*a, **k):
+        holder["c"] = cls(*a, **k)
+        return holder["c"]
+
+    monkeypatch.setattr(cli, "PortalFrameClient", _factory)
+    return holder
+
+
 def test_exit_5_when_section_name_missing(tmp_path, monkeypatch):
     gm = dict(_FULL_GET)
     gm["db/SECT"] = {"SECT": {"10": {"SECT_NAME": "H-400x200x8x13"}}}
-    monkeypatch.setattr(cli, "PortalFrameClient", _fake_client_cls(gm))
+    holder = _hold(monkeypatch, gm)
     rc = cli.main(["--template", _template(tmp_path), "--mapi-key", "k"])
     assert rc == 5
+    # 가드/해석은 첫 쓰기 전 — 어떤 PUT 도 나가면 안 됨.
+    assert holder["c"].puts == []
+    assert holder["c"].verbs_used() == ["GET"]
 
 
 def test_exit_4_when_model_not_empty(tmp_path, monkeypatch):
     gm = dict(_FULL_GET)
     gm["db/NODE"] = {"NODE": {"1": {"X": 0, "Y": 0, "Z": 0}}}
-    monkeypatch.setattr(cli, "PortalFrameClient", _fake_client_cls(gm))
+    holder = _hold(monkeypatch, gm)
     rc = cli.main(["--template", _template(tmp_path), "--mapi-key", "k"])
     assert rc == 4
+    # 빈 모델 가드는 PUT db/UNIT 전 — 단위계조차 바뀌면 안 됨.
+    assert holder["c"].puts == []
+    assert holder["c"].verbs_used() == ["GET"]
 
 
 def test_frame_mode_override_to_2d(tmp_path, monkeypatch):

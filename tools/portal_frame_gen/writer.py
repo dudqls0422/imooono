@@ -19,9 +19,9 @@ from .model import KIND_COLUMN, KIND_EAVE_STRUT, KIND_RAFTER, PortalFrameModel
 DEFAULT_BASE_URL = "https://moa-engineers.midasit.com:443/gen"
 UNIT_BODY = {"Assign": {"1": {"FORCE": "KN", "DIST": "M",
                               "HEAT": "KCAL", "TEMPER": "C"}}}
-# db/CONS.GROUP_NAME 미지정 허용 여부 라이브 미검증 — "" 우선, 거부되면 폴백.
+# db/CONS.GROUP_NAME 미지정("") 허용 여부는 라이브 미검증(write-recon.md §8).
+# 거부되면 사용자가 경계그룹을 먼저 만들거나 코드에서 기본값을 넣어야 한다.
 DEFAULT_BOUNDARY_GROUP = ""
-_BOUNDARY_GROUP_FALLBACK = "Service"
 
 
 class LiveWriteUnsupported(Exception):
@@ -97,19 +97,29 @@ def _json_or_none(resp):
 # --------------------------------------------------------------------------
 # 응답 파싱 (성공 / 에러 두 형태 방어적)
 # --------------------------------------------------------------------------
-def _is_success(resp) -> bool:
+def _is_success(resp, expect_key: str = None) -> bool:
+    """쓰기 성공은 명시적 형태를 요구한다.
+
+    2xx 라도 MIDAS 가 200 + ``{"message": "Invalid..."}`` 로 실패를 돌려줄 수
+    있으므로, 성공은 (a) 본문 없음, (b) 에코된 컬렉션 키(``expect_key``) 존재,
+    (c) ``Assign`` 키 에코 중 하나여야 한다. ``error`` 키나 순수
+    ``{"message": ...}`` 응답은 실패로 본다.
+    """
     if resp.status_code // 100 != 2:
         return False
     body = _json_or_none(resp)
-    if body is None or body == "":
+    if body is None or body == "" or body == {}:
         return True  # 200 무바디
-    if isinstance(body, dict):
-        if "error" in body:
-            return False
-        # {"message": "..."} 가 에러인지 빈 컬렉션 신호인지 모호 →
-        # 2xx 이고 error 키 없으면 성공으로 본다.
+    if not isinstance(body, dict):
         return True
-    return True
+    if "error" in body:
+        return False
+    if expect_key and expect_key in body:
+        return True
+    if "Assign" in body:
+        return True
+    # 컬렉션 키도 Assign 도 없이 message 만 → 실패로 간주(방어적).
+    return "message" not in body
 
 
 def _error_text(resp) -> str:
@@ -140,7 +150,7 @@ def put_unit(client: PortalFrameClient, log: Callable = print) -> None:
         raise LiveWriteUnsupported(
             f"PUT db/UNIT → HTTP {resp.status_code}. 라이브 쓰기 미지원 가능성 — "
             "Main 보고 필요.")
-    if not _is_success(resp):
+    if not _is_success(resp, "UNIT"):
         raise WriteFailed("UNIT", _error_text(resp), [])
     log("[write] db/UNIT (kN, m) 설정")
 
@@ -214,7 +224,8 @@ def write_model(client: PortalFrameClient, model: PortalFrameModel,
 
 def _put_step(client, path, body, step, done):
     resp = client.put(path, body)
-    if not _is_success(resp):
+    expect_key = path.rsplit("/", 1)[-1]  # NODE / ELEM / CONS / GRUP
+    if not _is_success(resp, expect_key):
         raise WriteFailed(step, _error_text(resp), list(done))
     done.append(step)
 
