@@ -23,8 +23,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
-    args = build_parser().parse_args(argv)
-    written = build_all(Path(args.out), preview=not args.no_preview)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    out = Path(args.out)
+    if out.exists() and not out.is_dir():
+        parser.error(f"--out 경로가 폴더가 아니라 파일입니다: {out}")
+    try:
+        out.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        parser.error(f"출력 폴더를 만들 수 없습니다: {out} ({e.strerror})")
+    written = build_all(out, preview=not args.no_preview)
     dxf = [p for p in written if p.suffix == ".dxf"]
     png = [p for p in written if p.suffix == ".png"]
     for p in dxf:

@@ -26,6 +26,19 @@ def build_file(fspec: FileSpec):
     return doc
 
 
+def freeze_class_order(doc) -> None:
+    """CLASSES 섹션 순서를 이름순으로 고정한다.
+
+    ezdxf 는 저장할 때 add_required_classes() 에서 사용 중인 엔티티 타입 set 을 순회하며
+    클래스를 추가하므로, 문자열 hash 순서(PYTHONHASHSEED)에 따라 실행마다 순서가 바뀐다.
+    저장 전에 같은 함수로 미리 등록하고 정렬해 두면, 저장 시점에는 새로 추가될 것이 없다.
+    """
+    doc.classes.add_required_classes(doc.dxfversion)
+    ordered = sorted(doc.classes.classes.items())
+    doc.classes.classes.clear()
+    doc.classes.classes.update(ordered)
+
+
 def build_all(out_dir: Path, preview: bool = True) -> list[Path]:
     """6개 DXF 를 out_dir 에 저장하고, preview 면 out_dir/preview 에 시트별 PNG 를 만든다."""
     out_dir = Path(out_dir)
@@ -34,6 +47,7 @@ def build_all(out_dir: Path, preview: bool = True) -> list[Path]:
     for fspec in FILES:
         doc = build_file(fspec)
         path = out_dir / fspec.filename
+        freeze_class_order(doc)
         doc.saveas(path)
         written.append(path)
         if preview:

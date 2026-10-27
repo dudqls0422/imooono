@@ -101,5 +101,11 @@ FILES: tuple[FileSpec, ...] = (
 )
 
 
+# 실습 Pxx 와 정답 Axx 의 도형(GUIDE·TEXT·DIM·FRAME 레이어 제외)이 같지 않아도 되는 시트.
+# 현재는 없다: 정답 시트는 실습과 같은 그림 함수로 시작 객체·완성 도형을 모두 그리고,
+# 정답에만 추가되는 번호 원·확대도(M2-A01)는 GUIDE 레이어라 비교에서 빠진다.
+ANSWER_FIGURE_EXCEPTIONS: frozenset[str] = frozenset()
+
+
 def all_sheets() -> list[SheetSpec]:
     return [s for f in FILES for s in f.sheets]
