@@ -19,7 +19,7 @@ def build_file(fspec: FileSpec):
             ("시트ID", spec.sheet_id),
             ("시트 종류", spec.kind),
             ("난이도", spec.level),
-            ("명령어(단축키)", spec.commands),
+            ("명령어(단축키)", spec.title_commands or spec.commands),
             ("", SCALE_NOTE),
         ])
         BUILDERS[spec.sheet_id](c, spec)

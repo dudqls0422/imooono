@@ -71,7 +71,7 @@ def _plan(f: Canvas) -> None:
     f.dim_linear((0, 0), (200, 0), (100, -40))
     f.dim_linear((-28, 0), (-28, 100), (-36, 50), angle=90)
     f.dim_linear((30, -WALL), (70, -WALL), (50, -16))
-    f.dim_linear((192, -COL), (208, -COL), (200, -16))
+    f.dim_linear((192, -COL), (208, -COL), (200, -16), location=(215, -16))
     f.dim_linear((150, 100 - WALL), (150, 100 + WALL), (156, 100), angle=90)
 
 

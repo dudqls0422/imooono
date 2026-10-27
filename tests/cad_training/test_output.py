@@ -185,6 +185,136 @@ def test_guide_mtext_fits_text_area(docs, fspec):
                     pytest.fail(f"{sid} 안내문이 {e.dxftype()}/{e.dxf.layer} 와 겹침")
 
 
+# B7. 선종류 실효 길이 (A3 1:1 출력 기준 = 패턴 × $LTSCALE × 엔티티 ltscale)
+LINETYPE_RULES = {"HIDDEN": (3.0, 1.5), "CENTER": (12.0, None)}  # (최소 대시, 최소 간격)
+
+
+def _effective_linetype(doc, e):
+    lt = e.dxf.get("linetype", "BYLAYER")
+    if lt.upper() == "BYLAYER":
+        lt = doc.layers.get(e.dxf.layer).dxf.linetype
+    return lt.upper()
+
+
+@pytest.mark.parametrize("name", FILE_IDS)
+def test_linetype_effective_lengths(docs, name):
+    doc = docs[name]
+    ltscale = doc.header["$LTSCALE"]
+    patterns = {}
+    for lt_name in LINETYPE_RULES:
+        tags = doc.linetypes.get(lt_name).pattern_tags.tags
+        patterns[lt_name] = [t.value for t in tags if t.code == 49]
+    used = set()
+    for e in doc.modelspace():
+        lt = _effective_linetype(doc, e)
+        if lt not in LINETYPE_RULES:
+            continue
+        used.add(lt)
+        k = ltscale * e.dxf.get("ltscale", 1.0)
+        dashes = [v * k for v in patterns[lt] if v > 0]
+        gaps = [-v * k for v in patterns[lt] if v < 0]
+        min_dash, min_gap = LINETYPE_RULES[lt]
+        if lt == "HIDDEN":
+            assert min(dashes) >= min_dash and min(gaps) >= min_gap, (lt, dashes, gaps)
+        else:
+            assert max(dashes) >= min_dash, (lt, dashes)
+    assert "CENTER" in used
+
+
+# B8. 모든 문자 높이 ≥ 3.5 (TEXT, MTEXT, 치수 블록 문자), 표제란 문자는 칸 안에 들어감
+MIN_TEXT_H = 3.5 - 1e-9
+
+
+@pytest.mark.parametrize("name", FILE_IDS)
+def test_text_height_lower_bound(docs, name):
+    doc = docs[name]
+    for t in _text_entities(doc):
+        h = t.dxf.height if t.dxftype() == "TEXT" else t.dxf.char_height
+        assert h >= MIN_TEXT_H, f"{t.dxftype()} 높이 {h}: {t.plain_text()[:30]}"
+    # 치수 문자는 치수 블록의 MTEXT 로 위에서 함께 검사된다
+    assert doc.dimstyles.get("EDU").dxf.dimtxt >= MIN_TEXT_H
+
+
+@pytest.mark.parametrize("fspec", FILES, ids=FILE_IDS)
+def test_title_block_text_fits_cells(docs, fspec):
+    from tools.cad_training.common import BORDER, TITLE_W, text_width
+
+    doc = docs[fspec.filename]
+    for fx, fy, _, _ in _frames(doc):
+        x1 = fx + SHEET_W - BORDER
+        x0 = x1 - TITLE_W
+        for t in doc.modelspace().query("TEXT[layer=='TEXT']"):
+            ix, iy = t.dxf.align_point.x if t.dxf.halign else t.dxf.insert.x, t.dxf.insert.y
+            if not (x0 <= ix <= x1 and fy + BORDER <= iy <= fy + BORDER + 40):
+                continue
+            right = ix + text_width(t.dxf.text, t.dxf.height)
+            cell_right = x0 + TITLE_W / 2 if ix < x0 + TITLE_W / 2 and t.dxf.insert.y > fy + 30 else x1
+            assert right <= cell_right - 2.5 + 1e-6, f"표제란 넘침: {t.dxf.text}"
+
+
+# B9. 번호 원(GUIDE 원, bbox 정사각형)은 치수(선분·화살표·문자)나 다른 번호 원과 겹치지 않아야 한다
+def _rect_overlap(a, b):
+    return a[0] < b[2] and a[2] > b[0] and a[1] < b[3] and a[3] > b[1]
+
+
+def _segment_hits_rect(p, q, r):
+    """선분 pq 가 사각형 r(xmin, ymin, xmax, ymax)의 내부를 지나는지 (Liang–Barsky)."""
+    t0, t1 = 0.0, 1.0
+    dx, dy = q[0] - p[0], q[1] - p[1]
+    for pk, qk in ((-dx, p[0] - r[0]), (dx, r[2] - p[0]), (-dy, p[1] - r[1]), (dy, r[3] - p[1])):
+        if abs(pk) < 1e-12:
+            if qk <= 0:
+                return False
+            continue
+        t = qk / pk
+        if pk < 0:
+            t0 = max(t0, t)
+        else:
+            t1 = min(t1, t)
+        if t0 >= t1:
+            return False
+    return True
+
+
+@pytest.mark.parametrize("fspec", FILES, ids=FILE_IDS)
+def test_markers_do_not_overlap_dimensions_or_each_other(docs, fspec):
+    from ezdxf.addons.drawing import RenderContext
+
+    from tools.cad_training.common import MARKER_R
+
+    doc = docs[fspec.filename]
+    ctx = RenderContext(doc)
+    msp = doc.modelspace()
+    markers = []
+    for c in msp.query("CIRCLE[layer=='GUIDE']"):
+        if abs(c.dxf.radius - MARKER_R) < 1e-9:
+            x, y = c.dxf.center.x, c.dxf.center.y
+            markers.append((x - MARKER_R, y - MARKER_R, x + MARKER_R, y + MARKER_R))
+    segments, rects = [], []
+    for d in msp.query("DIMENSION"):
+        for v in d.virtual_entities():
+            if v.dxftype() == "LINE":
+                segments.append(((v.dxf.start.x, v.dxf.start.y), (v.dxf.end.x, v.dxf.end.y)))
+            else:
+                b = _rendered_extents(ctx, v) if v.dxftype() == "MTEXT" else bbox.extents([v])
+                if b.has_data:
+                    rects.append((b.extmin.x, b.extmin.y, b.extmax.x, b.extmax.y))
+
+    def where(m):
+        i = int(m[0] // 470)
+        return f"{fspec.sheets[i].sheet_id} ({m[0] - i * 470 + MARKER_R:.1f}, {m[1] + MARKER_R:.1f})"
+
+    problems = []
+    for i, m in enumerate(markers):
+        if any(_segment_hits_rect(p, q, m) for p, q in segments):
+            problems.append(f"{where(m)} 치수선과 겹침")
+        if any(_rect_overlap(m, r) for r in rects):
+            problems.append(f"{where(m)} 치수 문자·화살표와 겹침")
+        if any(_rect_overlap(m, o) for o in markers[i + 1:]):
+            problems.append(f"{where(m)} 다른 번호 원과 겹침")
+    assert not problems, "\n".join(problems)
+
+
 # 회귀: M1-A03 정답의 POLYGON 입력이 실습 도형과 같은 육각형을 만들어야 한다 (QA 반려 PR #14).
 # AutoCAD POLYGON 외접(C)에 @R<θ 를 입력하면 변의 중점이 θ 에 오고 꼭짓점은 θ±30° 에 놓인다.
 def _hexagon_vertex_angles(doc, frame_index):

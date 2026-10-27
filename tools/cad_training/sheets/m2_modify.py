@@ -13,7 +13,6 @@ from ..common import Canvas
 from ._layout import example, practice
 
 MID = TextEntityAlignment.MIDDLE_CENTER
-SMALL = 3.0
 
 
 def _rotate(pt, base, deg):
@@ -39,7 +38,7 @@ def e01_move(c: Canvas, spec):
         f.pline(src, closed=True)
         f.marker(1, src[0])
         f.marker(2, dst[0])
-        f.text("@50,30", (dst[0][0] - 8, dst[0][1] + 8), height=SMALL)
+        f.text("@50,30", (dst[0][0] - 8, dst[0][1] + 8))
 
     def after(f: Canvas):
         f.pline(src, closed=True, layer="HIDDEN")
@@ -90,7 +89,7 @@ def e03_rotate(c: Canvas, spec):
     def after(f: Canvas):
         f.pline(src, closed=True, layer="HIDDEN")
         f.pline(dst, closed=True)
-        f.text("30°", (70, 48), height=SMALL)
+        f.text("30°", (70, 48))
 
     steps = ("명령: ROTATE [Enter] (RO)\\P"
              "현재 UCS 에서 양의 각도: 시계 반대 방향\\P"
@@ -229,7 +228,7 @@ def e08_fillet(c: Canvas, spec):
         f.line((10, 20), (75 - r, 20))
         f.arc((75 - r, 20 + r), r, 270, 360)
         f.line((75, 20 + r), (75, 90))
-        f.text("R15", (52, 40), height=SMALL)
+        f.text("R15", (52, 40))
 
     steps = ("명령: FILLET [Enter] (F)\\P"
              "현재 설정: 모드 = 자르기, 반지름 = 0\\P"
@@ -256,7 +255,7 @@ def e09_chamfer(c: Canvas, spec):
         f.line((10, 20), (75 - d, 20))
         f.line((75 - d, 20), (75, 20 + d))
         f.line((75, 20 + d), (75, 90))
-        f.text("10 × 10", (48, 36), height=SMALL)
+        f.text("10 × 10", (48, 36))
 
     steps = ("명령: CHAMFER [Enter] (CHA)\\P"
              "(자르기 모드) 현재 모따기 거리1 = 0, 거리2 = 0\\P"
@@ -380,7 +379,7 @@ def p02_columns(c: Canvas, spec):
         for y in ys:
             f.line((-10, y), (170, y), layer="CENTER")
         f.line((axis_x, -14), (axis_x, 54), layer="CENTER")
-        f.text("대칭축", (axis_x, 59), height=SMALL, align=MID)
+        f.text("대칭축", (axis_x, 59), align=MID)
 
     def column(f: Canvas, x, y):
         f.rect(x - half, y - half, x + half, y + half)
@@ -403,8 +402,8 @@ def p02_columns(c: Canvas, spec):
         g.dim_linear((-half, 40 + half), (half, 40 + half), (0, 52))
         if answer:
             g.marker(1, (-14, 12))
-            g.marker(2, (axis_x + 7, 54))
-            g.marker(3, (axis_x + 7, -14))
+            g.marker(2, (axis_x - 10, 52))
+            g.marker(3, (axis_x, -25))
 
     steps = ("① ARRAY (AR) → 직사각형(R): 기둥 □12 선택 → 열 3, 행 2, 열 간격 30, 행 간격 40\\P"
              "② MIRROR (MI): 배열 선택 → 대칭축 위·아래 끝점 (②, ③) → 원본 지우기 N\\P\\P"
@@ -450,7 +449,7 @@ def p03_beam(c: Canvas, spec):
         g.dim_linear((w - ch, 0), (w - ch, h), (w + 14, h / 2), angle=90)
         g.dim_linear((0, h / 2), (cover, h / 2), (cover / 2, h / 2 + 8))
         g.dim_linear((w - ch, 0), (w, ch), (w - ch / 2, -8))
-        g.dim_radius((w - fc, h - fc), rf, angle=45)
+        g.dim_radius((w - fc, h - fc), rf, angle=225, location=(w / 2, h - 30))
         g.dim_diameter(bars[1], rb, angle=60)
         if answer:
             g.marker(1, (-7, -7))

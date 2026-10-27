@@ -13,7 +13,6 @@ from ..common import Canvas
 from ._layout import example, practice
 
 MID = TextEntityAlignment.MIDDLE_CENTER
-SMALL = 3.0
 
 
 # ── 예제 ──────────────────────────────────────────────────────────────
@@ -26,12 +25,12 @@ def e01_line(c: Canvas, spec):
     def before(f: Canvas):
         for n, (pt, s, off) in enumerate(labels, 1):
             f.marker(n, pt)
-            f.text(s, (pt[0] + off[0], pt[1] + off[1]), height=SMALL)
+            f.text(s, (pt[0] + off[0], pt[1] + off[1]))
 
     def after(f: Canvas):
         f.lines([a, b, p], closed=True)
         for pt, s, off in labels:
-            f.text(s, (pt[0] + off[0], pt[1] + off[1]), height=SMALL)
+            f.text(s, (pt[0] + off[0], pt[1] + off[1]))
 
     steps = ("명령: LINE [Enter] (L)\\P"
              "첫 번째 점 지정: 20,20 [Enter]\\P  → ① 절대좌표 (x,y)\\P"
@@ -53,7 +52,7 @@ def _tangent_mark(f: Canvas, pt, label_off):
     d = 2.0
     f.line((pt[0] - d, pt[1] - d), (pt[0] + d, pt[1] + d), layer="GUIDE")
     f.line((pt[0] - d, pt[1] + d), (pt[0] + d, pt[1] - d), layer="GUIDE")
-    f.text("접점", (pt[0] + label_off[0], pt[1] + label_off[1]), height=SMALL, layer="GUIDE")
+    f.text("접점", (pt[0] + label_off[0], pt[1] + label_off[1]), layer="GUIDE")
 
 
 def e02_circle(c: Canvas, spec):
@@ -69,7 +68,7 @@ def e02_circle(c: Canvas, spec):
     def before(f: Canvas):
         base(f)
         f.circle(o, big, layer="HIDDEN")
-        f.text("1단계 후 생기는 원", (o[0] - 20, o[1] + big + 6), height=SMALL, layer="GUIDE")
+        f.text("1단계 후 생기는 원", (o[0] - 20, o[1] + big + 6), layer="GUIDE")
         f.marker(1, o)
         f.marker(2, (tx, 20))
         f.marker(3, t_on_circle)
@@ -128,11 +127,11 @@ def e04_rectang(c: Canvas, spec):
     def before(f: Canvas):
         f.marker(1, p1)
         f.marker(2, p2)
-        f.text("@80,50", (p2[0] - 30, p2[1] + 8), height=SMALL)
+        f.text("@80,50", (p2[0] - 30, p2[1] + 8))
 
     def after(f: Canvas):
         f.rect(*p1, *p2)
-        f.text("80 × 50", ((p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2), height=SMALL, align=MID)
+        f.text("80 × 50", ((p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2), align=MID)
 
     steps = ("명령: RECTANG [Enter] (REC)\\P"
              "첫 번째 구석점 지정 또는 [모따기(C)/고도(E)/모깎기(F)/두께(T)/폭(W)]: ①\\P"
@@ -174,12 +173,12 @@ def e06_polygon(c: Canvas, spec):
     def before(f: Canvas):
         f.marker(1, ctr)
         f.marker(2, verts[0])
-        f.text("@35<0", (verts[0][0] - 12, verts[0][1] - 9), height=SMALL)
+        f.text("@35<0", (verts[0][0] - 12, verts[0][1] - 9))
 
     def after(f: Canvas):
         f.circle(ctr, r, layer="HIDDEN")
         f.pline(verts, closed=True)
-        f.text("가상 원 (내접)", (ctr[0], ctr[1] - r - 8), height=SMALL, align=MID)
+        f.text("가상 원 (내접)", (ctr[0], ctr[1] - r - 8), align=MID)
 
     steps = ("명령: POLYGON [Enter] (POL)\\P"
              "면의 수 입력 <4>: 6 [Enter]\\P"
@@ -216,14 +215,14 @@ def p01_columns(c: Canvas, spec):
         f.circle(o, 50)
         f.circle(o, 40)
         f.dim_diameter(o, 50, angle=45)
-        f.dim_diameter(o, 40, angle=135)
+        f.dim_diameter(o, 40, angle=135, location=(330, 175))
         f.text("원형 기둥 φ100 (띠철근 φ80)", (345, 80), align=MID)
         if answer:
             f.marker(1, (232, 104))
             f.marker(2, (281, 104))
             f.marker(3, (202, 135))
             f.marker(4, (377, 113))
-            f.marker(5, (318, 133))
+            f.marker(5, (330, 118))
 
     steps = ("① LINE (L): 중심선 2개씩 (CENTER 레이어)\\P"
              "② RECTANG (REC): 첫 점 클릭 → @100,100 [Enter]\\P"
@@ -289,7 +288,7 @@ def p03_footing(c: Canvas, spec):
             f.circle(b, 6)
         f.dim_linear(verts[3], verts[5], (0, -93))
         f.dim_linear((-40, 40), (40, 40), (0, 92))
-        f.dim_diameter((0, 0), 20, angle=160)
+        f.dim_diameter((0, 0), 20, angle=150, location=(-12, 8))
         f.dim_diameter(bolts[1], 6, angle=-45)
         if answer:
             f.marker(1, (86, 8))
