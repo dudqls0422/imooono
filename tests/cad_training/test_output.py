@@ -1,6 +1,8 @@
 """생성된 DXF·PNG 검증 (Plan 스펙 T4 의 검사 1~9)."""
 from __future__ import annotations
 
+import re
+
 import ezdxf
 import numpy as np
 import pytest
@@ -57,7 +59,38 @@ def test_frame_count_and_no_overlap(docs, fspec):
         assert b[0] > a[2], f"도곽 겹침: {a} / {b}"
 
 
-# 3. 각 도곽 안에 manifest 필수 엔티티 타입 존재 (도곽선·안내 표시 레이어 제외)
+# 10-(b). 도곽 피치 470·원점 y 0, 안쪽 여백 10, 표제란 180×40 이 오른쪽 아래에 있음
+def _closed_frame_rects(doc):
+    rects = set()
+    for e in doc.modelspace().query("LWPOLYLINE[layer=='FRAME']"):
+        if e.closed:
+            ext = bbox.extents([e])
+            rects.add(tuple(round(v, 6) for v in (ext.extmin.x, ext.extmin.y,
+                                                  ext.extmax.x, ext.extmax.y)))
+    return rects
+
+
+@pytest.mark.parametrize("fspec", FILES, ids=FILE_IDS)
+def test_frame_pitch_border_and_title_block(docs, fspec):
+    from tools.cad_training.common import BORDER, SHEET_PITCH, TITLE_H, TITLE_W
+
+    doc = docs[fspec.filename]
+    frames = _frames(doc)
+    rects = _closed_frame_rects(doc)
+    assert [round(f[0], 6) for f in frames] == [i * SHEET_PITCH for i in range(len(frames))]
+    assert SHEET_PITCH == 470
+    for fx, fy, fx1, fy1 in frames:
+        assert fy == 0
+        inner = (fx + BORDER, fy + BORDER, fx1 - BORDER, fy1 - BORDER)
+        title = (fx1 - BORDER - TITLE_W, fy + BORDER, fx1 - BORDER, fy + BORDER + TITLE_H)
+        assert tuple(round(v, 6) for v in inner) in rects, f"안쪽 테두리 없음: {fx}"
+        assert tuple(round(v, 6) for v in title) in rects, f"표제란 없음: {fx}"
+        assert (TITLE_W, TITLE_H) == (180, 40)
+
+
+# 3. 각 도곽 안에 manifest 필수 엔티티 타입 존재.
+#    10-(c): 필수 타입 판정에서는 FRAME·GUIDE 엔티티를 빼서 도곽·표시 기호만으로 통과하지 못하게 하고,
+#    도곽 밖 엔티티 검사는 모든 레이어에 적용한다.
 @pytest.mark.parametrize("fspec", FILES, ids=FILE_IDS)
 def test_required_entities_inside_each_frame(docs, fspec):
     doc = docs[fspec.filename]
@@ -65,15 +98,14 @@ def test_required_entities_inside_each_frame(docs, fspec):
     found = [set() for _ in frames]
     cache = bbox.Cache()
     for e in doc.modelspace():
-        if e.dxf.layer in ("FRAME", "GUIDE"):
-            continue
         ext = bbox.extents([e], cache=cache)
         if not ext.has_data:
             continue
         for i, (x0, y0, x1, y1) in enumerate(frames):
             if (ext.extmin.x >= x0 - TOL and ext.extmax.x <= x1 + TOL
                     and ext.extmin.y >= y0 - TOL and ext.extmax.y <= y1 + TOL):
-                found[i].add(e.dxftype())
+                if e.dxf.layer not in ("FRAME", "GUIDE"):
+                    found[i].add(e.dxftype())
                 break
         else:
             pytest.fail(f"도곽 밖 엔티티: {e.dxftype()} {e.dxf.layer} {ext}")
@@ -120,7 +152,33 @@ def test_previews_exist_and_not_blank(out):
         assert arr.var() > 50.0, f"빈 이미지로 보임: {p.name} (분산 {arr.var():.1f})"
 
 
-# 8. 두 번 생성한 엔티티 덤프가 같음 (헤더 시각·GUID 는 엔티티가 아니므로 자연히 제외)
+# 8 / 10-(d) / 12. 별도 프로세스 2회(PYTHONHASHSEED 0·4)로 생성한 결과가 같음.
+#   엔티티 덤프(타입·레이어·좌표·문자열)와 파일 바이트를 모두 비교한다.
+#   바이트 비교에서 빼는 값: 생성·수정 시각과 GUID 헤더, ezdxf 메타데이터의 저장 시각.
+#   CLASSES 섹션은 build.freeze_class_order 로 순서를 고정했으므로 제외하지 않는다.
+VOLATILE_HEADER_VARS = {"$TDCREATE", "$TDUPDATE", "$TDUCREATE", "$TDUUPDATE",
+                        "$FINGERPRINTGUID", "$VERSIONGUID"}
+EZDXF_META_VALUE = re.compile(r"^\d+\.\d+\.\d+ @ \d{4}-\d\d-\d\dT")
+
+
+def _normalized_tags(path):
+    lines = path.read_text(encoding="utf-8").splitlines()
+    pairs = list(zip(lines[0::2], lines[1::2]))
+    out, skip = [], False
+    for code, value in pairs:
+        code = code.strip()
+        if code == "9":
+            skip = value in VOLATILE_HEADER_VARS
+        elif code == "0":
+            skip = False
+        if skip:
+            continue
+        if code == "1" and EZDXF_META_VALUE.match(value):
+            value = "<ezdxf 메타데이터 시각>"
+        out.append((code, value))
+    return out
+
+
 def _dump(doc):
     def norm(v):
         if hasattr(v, "x"):
@@ -141,8 +199,271 @@ def _dump(doc):
 
 
 @pytest.mark.parametrize("name", FILE_IDS)
-def test_generation_is_deterministic(out, out2, name):
-    assert _dump(ezdxf.readfile(out / name)) == _dump(ezdxf.readfile(out2 / name))
+def test_generation_is_deterministic_across_processes(seed_outs, name):
+    a, b = (d / name for d in seed_outs)
+    assert _dump(ezdxf.readfile(a)) == _dump(ezdxf.readfile(b))
+    ta, tb = _normalized_tags(a), _normalized_tags(b)
+    assert len(ta) == len(tb)
+    diff = [(i, x, y) for i, (x, y) in enumerate(zip(ta, tb)) if x != y]
+    assert not diff, f"바이트 차이 {len(diff)}곳, 처음: {diff[:3]}"
+
+
+# 10-(a). 실습 Pxx 와 정답 Axx 의 도형이 같음 (도곽 원점 기준 상대좌표, GUIDE·TEXT·DIM·FRAME 제외)
+FIGURE_SKIP_LAYERS = {"GUIDE", "TEXT", "DIM", "FRAME"}
+
+
+def _figure_signature(doc, frame):
+    fx, fy = frame[0], frame[1]
+
+    def rel(v):
+        return (round(v[0] - fx, 6), round(v[1] - fy, 6))
+
+    rows = []
+    for e in doc.modelspace():
+        if e.dxf.layer in FIGURE_SKIP_LAYERS:
+            continue
+        ext = bbox.extents([e])
+        if not (frame[0] <= ext.extmin.x and ext.extmax.x <= frame[2]):
+            continue
+        t = e.dxftype()
+        if t == "LINE":
+            geo = (rel(e.dxf.start), rel(e.dxf.end))
+        elif t == "CIRCLE":
+            geo = (rel(e.dxf.center), round(e.dxf.radius, 6))
+        elif t == "ARC":
+            geo = (rel(e.dxf.center), round(e.dxf.radius, 6),
+                   round(e.dxf.start_angle, 6), round(e.dxf.end_angle, 6))
+        elif t == "LWPOLYLINE":
+            geo = (e.closed, tuple((*rel(p), round(p[4], 6)) for p in e.get_points("xyseb")))
+        else:
+            geo = (rel(e.dxf.insert),) if e.dxf.hasattr("insert") else ()
+        rows.append((t, e.dxf.layer, geo))
+    return sorted(rows)
+
+
+def test_practice_and_answer_figures_match(docs):
+    from tools.cad_training.manifest import ANSWER_FIGURE_EXCEPTIONS
+
+    index = {}
+    for f in FILES:
+        frames = _frames(docs[f.filename])
+        for spec, frame in zip(f.sheets, frames):
+            index[spec.sheet_id] = (docs[f.filename], frame)
+    pairs = [s.sheet_id for s in all_sheets() if s.kind == PRACTICE]
+    assert pairs
+    for pid in pairs:
+        aid = pid.replace("-P", "-A")
+        if aid in ANSWER_FIGURE_EXCEPTIONS:
+            continue
+        p_sig = _figure_signature(*index[pid])
+        a_sig = _figure_signature(*index[aid])
+        assert p_sig, f"{pid} 도형 없음"
+        assert p_sig == a_sig, f"{pid} 와 {aid} 도형이 다름"
+
+
+# 안내문 MTEXT 는 실제 렌더링 범위가 왼쪽 안내문 영역 안에 있고 다른 엔티티와 겹치지 않아야 한다.
+# ezdxf.bbox 는 MTEXT 의 지정 폭만 쓰므로(긴 단어가 넘쳐도 모름) drawing 애드온으로 렌더링해 잰다.
+TEXT_AREA = (15.0, 15.0, 145.0, 265.0)
+
+
+def _rendered_extents(ctx, entity):
+    from ezdxf.addons.drawing import Frontend
+    from ezdxf.addons.drawing.recorder import Recorder
+
+    rec = Recorder()
+    Frontend(ctx, rec).draw_entities([entity])
+    return rec.player().bbox()
+
+
+@pytest.mark.parametrize("fspec", FILES, ids=FILE_IDS)
+def test_guide_mtext_fits_text_area(docs, fspec):
+    from ezdxf.addons.drawing import RenderContext
+
+    doc = docs[fspec.filename]
+    ctx = RenderContext(doc)
+    msp = doc.modelspace()
+    others = [(e, bbox.extents([e])) for e in msp if e.dxf.layer != "FRAME" and e.dxftype() != "MTEXT"]
+    for i, (fx, fy, _, _) in enumerate(_frames(doc)):
+        sid = fspec.sheets[i].sheet_id
+        texts = [m for m in msp.query("MTEXT[layer=='TEXT']") if fx <= m.dxf.insert.x <= fx + SHEET_W]
+        assert texts, f"{sid} 안내문 없음"
+        for m in texts:
+            b = _rendered_extents(ctx, m)
+            x0, y0, x1, y1 = b.extmin.x - fx, b.extmin.y - fy, b.extmax.x - fx, b.extmax.y - fy
+            assert (x0 >= TEXT_AREA[0] and y0 >= TEXT_AREA[1]
+                    and x1 <= TEXT_AREA[2] and y1 <= TEXT_AREA[3]), \
+                f"{sid} 안내문이 영역 밖: x {x0:.1f}~{x1:.1f}, y {y0:.1f}~{y1:.1f}"
+            for e, eb in others:
+                if not eb.has_data:
+                    continue
+                if (eb.extmin.x < b.extmax.x and eb.extmax.x > b.extmin.x
+                        and eb.extmin.y < b.extmax.y and eb.extmax.y > b.extmin.y):
+                    pytest.fail(f"{sid} 안내문이 {e.dxftype()}/{e.dxf.layer} 와 겹침")
+
+
+# B7. 선종류 실효 길이 (A3 1:1 출력 기준 = 패턴 × $LTSCALE × 엔티티 ltscale)
+LINETYPE_RULES = {"HIDDEN": (3.0, 1.5), "CENTER": (12.0, None)}  # (최소 대시, 최소 간격)
+
+
+def _effective_linetype(doc, e):
+    lt = e.dxf.get("linetype", "BYLAYER")
+    if lt.upper() == "BYLAYER":
+        lt = doc.layers.get(e.dxf.layer).dxf.linetype
+    return lt.upper()
+
+
+@pytest.mark.parametrize("name", FILE_IDS)
+def test_linetype_effective_lengths(docs, name):
+    doc = docs[name]
+    ltscale = doc.header["$LTSCALE"]
+    patterns = {}
+    for lt_name in LINETYPE_RULES:
+        tags = doc.linetypes.get(lt_name).pattern_tags.tags
+        patterns[lt_name] = [t.value for t in tags if t.code == 49]
+    used = set()
+    for e in doc.modelspace():
+        lt = _effective_linetype(doc, e)
+        if lt not in LINETYPE_RULES:
+            continue
+        used.add(lt)
+        k = ltscale * e.dxf.get("ltscale", 1.0)
+        dashes = [v * k for v in patterns[lt] if v > 0]
+        gaps = [-v * k for v in patterns[lt] if v < 0]
+        min_dash, min_gap = LINETYPE_RULES[lt]
+        if lt == "HIDDEN":
+            assert min(dashes) >= min_dash and min(gaps) >= min_gap, (lt, dashes, gaps)
+        else:
+            assert max(dashes) >= min_dash, (lt, dashes)
+    assert "CENTER" in used
+
+
+# B8. 모든 문자 높이 ≥ 3.5 (TEXT, MTEXT, 치수 블록 문자), 표제란 문자는 칸 안에 들어감
+MIN_TEXT_H = 3.5 - 1e-9
+
+
+@pytest.mark.parametrize("name", FILE_IDS)
+def test_text_height_lower_bound(docs, name):
+    doc = docs[name]
+    for t in _text_entities(doc):
+        h = t.dxf.height if t.dxftype() == "TEXT" else t.dxf.char_height
+        assert h >= MIN_TEXT_H, f"{t.dxftype()} 높이 {h}: {t.plain_text()[:30]}"
+    # 치수 문자는 치수 블록의 MTEXT 로 위에서 함께 검사된다
+    assert doc.dimstyles.get("EDU").dxf.dimtxt >= MIN_TEXT_H
+
+
+@pytest.mark.parametrize("fspec", FILES, ids=FILE_IDS)
+def test_title_block_text_fits_cells(docs, fspec):
+    from tools.cad_training.common import BORDER, TITLE_W, text_width
+
+    doc = docs[fspec.filename]
+    for fx, fy, _, _ in _frames(doc):
+        x1 = fx + SHEET_W - BORDER
+        x0 = x1 - TITLE_W
+        for t in doc.modelspace().query("TEXT[layer=='TEXT']"):
+            ix, iy = t.dxf.align_point.x if t.dxf.halign else t.dxf.insert.x, t.dxf.insert.y
+            if not (x0 <= ix <= x1 and fy + BORDER <= iy <= fy + BORDER + 40):
+                continue
+            right = ix + text_width(t.dxf.text, t.dxf.height)
+            cell_right = x0 + TITLE_W / 2 if ix < x0 + TITLE_W / 2 and t.dxf.insert.y > fy + 30 else x1
+            assert right <= cell_right - 2.5 + 1e-6, f"표제란 넘침: {t.dxf.text}"
+
+
+# B9. 번호 원(GUIDE 원, bbox 정사각형)은 치수(선분·화살표·문자)나 다른 번호 원과 겹치지 않아야 한다
+def _rect_overlap(a, b):
+    return a[0] < b[2] and a[2] > b[0] and a[1] < b[3] and a[3] > b[1]
+
+
+def _segment_hits_rect(p, q, r):
+    """선분 pq 가 사각형 r(xmin, ymin, xmax, ymax)의 내부를 지나는지 (Liang–Barsky)."""
+    t0, t1 = 0.0, 1.0
+    dx, dy = q[0] - p[0], q[1] - p[1]
+    for pk, qk in ((-dx, p[0] - r[0]), (dx, r[2] - p[0]), (-dy, p[1] - r[1]), (dy, r[3] - p[1])):
+        if abs(pk) < 1e-12:
+            if qk <= 0:
+                return False
+            continue
+        t = qk / pk
+        if pk < 0:
+            t0 = max(t0, t)
+        else:
+            t1 = min(t1, t)
+        if t0 >= t1:
+            return False
+    return True
+
+
+@pytest.mark.parametrize("fspec", FILES, ids=FILE_IDS)
+def test_markers_do_not_overlap_dimensions_or_each_other(docs, fspec):
+    from ezdxf.addons.drawing import RenderContext
+
+    from tools.cad_training.common import MARKER_R
+
+    doc = docs[fspec.filename]
+    ctx = RenderContext(doc)
+    msp = doc.modelspace()
+    markers = []
+    for c in msp.query("CIRCLE[layer=='GUIDE']"):
+        if abs(c.dxf.radius - MARKER_R) < 1e-9:
+            x, y = c.dxf.center.x, c.dxf.center.y
+            markers.append((x - MARKER_R, y - MARKER_R, x + MARKER_R, y + MARKER_R))
+    segments, rects = [], []
+    for d in msp.query("DIMENSION"):
+        for v in d.virtual_entities():
+            if v.dxftype() == "LINE":
+                segments.append(((v.dxf.start.x, v.dxf.start.y), (v.dxf.end.x, v.dxf.end.y)))
+            else:
+                b = _rendered_extents(ctx, v) if v.dxftype() == "MTEXT" else bbox.extents([v])
+                if b.has_data:
+                    rects.append((b.extmin.x, b.extmin.y, b.extmax.x, b.extmax.y))
+
+    def where(m):
+        i = int(m[0] // 470)
+        return f"{fspec.sheets[i].sheet_id} ({m[0] - i * 470 + MARKER_R:.1f}, {m[1] + MARKER_R:.1f})"
+
+    problems = []
+    for i, m in enumerate(markers):
+        if any(_segment_hits_rect(p, q, m) for p, q in segments):
+            problems.append(f"{where(m)} 치수선과 겹침")
+        if any(_rect_overlap(m, r) for r in rects):
+            problems.append(f"{where(m)} 치수 문자·화살표와 겹침")
+        if any(_rect_overlap(m, o) for o in markers[i + 1:]):
+            problems.append(f"{where(m)} 다른 번호 원과 겹침")
+    assert not problems, "\n".join(problems)
+
+
+# 회귀(PR #16 반려): 반지름·지름 치수의 치수점이 실제 원 위, 또는 호의 각도 범위 안에 있어야 한다.
+# 문자 location 을 주면 치수점 방향이 중심→문자 위치로 바뀌어 빈 곳을 가리킬 수 있다.
+def _on_curve(curves, p):
+    for c in curves:
+        cx, cy, r = c.dxf.center.x, c.dxf.center.y, c.dxf.radius
+        if abs(np.hypot(p[0] - cx, p[1] - cy) - r) > 1e-6:
+            continue
+        if c.dxftype() == "CIRCLE":
+            return True
+        a = np.degrees(np.arctan2(p[1] - cy, p[0] - cx)) % 360
+        s, e = c.dxf.start_angle % 360, c.dxf.end_angle % 360
+        if (s <= a <= e) if s <= e else (a >= s or a <= e):
+            return True
+    return False
+
+
+@pytest.mark.parametrize("fspec", FILES, ids=FILE_IDS)
+def test_radial_dimensions_point_at_real_curves(docs, fspec):
+    msp = docs[fspec.filename].modelspace()
+    curves = [c for c in msp.query("CIRCLE ARC") if c.dxf.layer != "GUIDE"]
+    checked = 0
+    for d in msp.query("DIMENSION"):
+        kind = d.dimtype
+        if kind not in (3, 4):  # 3 지름, 4 반지름
+            continue
+        points = [d.dxf.defpoint4] + ([d.dxf.defpoint] if kind == 3 else [])
+        for p in points:
+            i = int(p.x // 470)
+            assert _on_curve(curves, (p.x, p.y)), \
+                f"{fspec.sheets[i].sheet_id} 치수점 ({p.x - i * 470:.2f}, {p.y:.2f}) 이 원·호 위가 아님"
+        checked += 1
+    if fspec.filename.startswith("M2_수정"):
+        assert checked, "M2 의 반지름·지름 치수를 하나도 검사하지 못함"
 
 
 # 회귀: M1-A03 정답의 POLYGON 입력이 실습 도형과 같은 육각형을 만들어야 한다 (QA 반려 PR #14).

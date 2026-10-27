@@ -6,7 +6,7 @@ required 는 해당 도곽 안에 반드시 있어야 하는 엔티티 타입(�
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 EXAMPLE = "예제"
 PRACTICE = "실습"
@@ -21,6 +21,8 @@ class SheetSpec:
     commands: str
     level: str
     required: tuple[str, ...]
+    # 표제란 명령어 칸에 넣을 짧은 표기 (commands 가 칸 폭을 넘을 때만 지정)
+    title_commands: str = ""
 
 
 @dataclass(frozen=True)
@@ -34,13 +36,14 @@ def _ex(sid, title, commands, required, level="하"):
     return SheetSpec(sid, EXAMPLE, title, commands, level, ("MTEXT",) + required)
 
 
-def _pr(sid, title, commands, required, level):
-    return SheetSpec(sid, PRACTICE, title, commands, level, ("MTEXT", "DIMENSION") + required)
+def _pr(sid, title, commands, required, level, title_commands=""):
+    return SheetSpec(sid, PRACTICE, title, commands, level, ("MTEXT", "DIMENSION") + required,
+                     title_commands)
 
 
 def _answers(practices):
-    return tuple(SheetSpec(p.sheet_id.replace("-P", "-A"), ANSWER, p.title, p.commands,
-                           p.level, p.required) for p in practices)
+    return tuple(replace(p, sheet_id=p.sheet_id.replace("-P", "-A"), kind=ANSWER)
+                 for p in practices)
 
 
 M1_EXAMPLES = (
@@ -82,9 +85,10 @@ M2_PRACTICES = (
 )
 
 C1_PRACTICES = (
-    _pr("C1-P01", "소규모 평면 일부 (종합)",
+    _pr("C1-P01", "소규모 평면 일부 종합",
         "LINE (L), RECTANG (REC), CIRCLE (C), ARC (A), OFFSET (O), TRIM (TR), ARRAY (AR), MIRROR (MI)",
-        ("LINE", "LWPOLYLINE", "CIRCLE", "ARC"), "상"),
+        ("LINE", "LWPOLYLINE", "CIRCLE", "ARC"), "상",
+        title_commands="L, REC, C, A, O, TR, AR, MI"),
 )
 
 FILES: tuple[FileSpec, ...] = (
@@ -95,6 +99,12 @@ FILES: tuple[FileSpec, ...] = (
     FileSpec("C1_종합실습.dxf", "C1 종합실습", C1_PRACTICES),
     FileSpec("C1_종합실습_정답.dxf", "C1 종합실습", _answers(C1_PRACTICES)),
 )
+
+
+# 실습 Pxx 와 정답 Axx 의 도형(GUIDE·TEXT·DIM·FRAME 레이어 제외)이 같지 않아도 되는 시트.
+# 현재는 없다: 정답 시트는 실습과 같은 그림 함수로 시작 객체·완성 도형을 모두 그리고,
+# 정답에만 추가되는 번호 원·확대도(M2-A01)는 GUIDE 레이어라 비교에서 빠진다.
+ANSWER_FIGURE_EXCEPTIONS: frozenset[str] = frozenset()
 
 
 def all_sheets() -> list[SheetSpec]:

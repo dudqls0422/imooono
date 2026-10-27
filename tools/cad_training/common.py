@@ -39,9 +39,13 @@ LAYERS = {
     "GUIDE": (6, "Continuous"),
 }
 
-# ezdxf setup=True 는 HIDDEN 을 만들지 않으므로, 같은 스케일의 DASHED 패턴으로 직접 등록한다.
-HIDDEN_PATTERN = [1.524, 1.27, -0.254]
-LTSCALE = 2.0
+# 선종류 패턴: acadiso.lin 값 [전체 길이, 대시, -간격, ...] (mm).
+# ezdxf setup=True 의 CENTER 는 1/10 스케일이고 HIDDEN 은 없어서 둘 다 다시 등록한다.
+# A3 1:1 출력 실효 길이(패턴 × LTSCALE): CENTER 긴 대시 15.9, HIDDEN 대시 3.2 / 간격 1.6.
+CENTER_PATTERN = [50.8, 31.75, -6.35, 6.35, -6.35]
+HIDDEN_PATTERN = [9.525, 6.35, -3.175]
+LTSCALE = 0.5
+MARKER_R = 4.5
 
 
 def new_document() -> ezdxf.document.Drawing:
@@ -50,8 +54,11 @@ def new_document() -> ezdxf.document.Drawing:
     doc.header["$INSUNITS"] = 4
     doc.header["$MEASUREMENT"] = 1
     doc.header["$LTSCALE"] = LTSCALE
-    if "HIDDEN" not in doc.linetypes:
-        doc.linetypes.add("HIDDEN", HIDDEN_PATTERN, description="Hidden __ __ __ __")
+    for name, pattern, desc in (("CENTER", CENTER_PATTERN, "Center ____ _ ____ _ ____"),
+                                ("HIDDEN", HIDDEN_PATTERN, "Hidden __ __ __ __")):
+        if name in doc.linetypes:
+            doc.linetypes.remove(name)
+        doc.linetypes.add(name, pattern, description=desc)
     for name, (color, linetype) in LAYERS.items():
         doc.layers.add(name, color=color, linetype=linetype)
     doc.styles.add(STYLE, font=FONT)
@@ -91,16 +98,23 @@ class Canvas:
     def p(self, x: float, y: float) -> tuple[float, float]:
         return (self.ox + x, self.oy + y)
 
-    def line(self, a, b, layer: str = "OUTLINE"):
-        return self.msp.add_line(self.p(*a), self.p(*b), dxfattribs={"layer": layer})
+    def line(self, a, b, layer: str = "OUTLINE", linetype: str | None = None):
+        """linetype 을 주면 레이어 선종류 대신 엔티티 선종류를 쓴다 (GUIDE 확대도의 중심선 등)."""
+        attribs = {"layer": layer}
+        if linetype:
+            attribs["linetype"] = linetype
+        return self.msp.add_line(self.p(*a), self.p(*b), dxfattribs=attribs)
 
     def lines(self, pts: Sequence, layer: str = "OUTLINE", closed: bool = False):
         """점열을 개별 LINE 으로 잇는다 (LINE 명령 결과와 같은 형태)."""
         seq = list(pts) + ([pts[0]] if closed else [])
         return [self.line(a, b, layer) for a, b in zip(seq, seq[1:])]
 
-    def circle(self, c, r: float, layer: str = "OUTLINE"):
-        return self.msp.add_circle(self.p(*c), r, dxfattribs={"layer": layer})
+    def circle(self, c, r: float, layer: str = "OUTLINE", linetype: str | None = None):
+        attribs = {"layer": layer}
+        if linetype:
+            attribs["linetype"] = linetype
+        return self.msp.add_circle(self.p(*c), r, dxfattribs=attribs)
 
     def arc(self, c, r: float, start: float, end: float, layer: str = "OUTLINE"):
         return self.msp.add_arc(self.p(*c), r, start, end, dxfattribs={"layer": layer})
@@ -133,11 +147,10 @@ class Canvas:
         m.set_location(self.p(*pos), attachment_point=MTextEntityAlignment.TOP_LEFT)
         return m
 
-    def marker(self, n: int, pos, r: float = 3.5):
-        """클릭 위치·작도 순서를 나타내는 번호 원 (GUIDE)."""
-        self.circle(pos, r, layer="GUIDE")
-        self.text(str(n), pos, height=TEXT_H * 0.8, layer="GUIDE",
-                  align=TextEntityAlignment.MIDDLE_CENTER)
+    def marker(self, n: int, pos):
+        """클릭 위치·작도 순서를 나타내는 번호 원 (GUIDE). 숫자 높이 3.5 가 들어가는 반지름."""
+        self.circle(pos, MARKER_R, layer="GUIDE")
+        self.text(str(n), pos, layer="GUIDE", align=TextEntityAlignment.MIDDLE_CENTER)
 
     def arrow(self, a, b, head: float = 5.0, width: float = 3.0):
         """a → b 화살표 (GUIDE). 머리는 폭이 줄어드는 폴리선 구간."""
@@ -148,21 +161,26 @@ class Canvas:
             [(*self.p(hx, hy), width, 0, 0), (*self.p(*b), 0, 0, 0)],
             format="xyseb", dxfattribs={"layer": "GUIDE"})
 
-    def dim_linear(self, p1, p2, base, angle: float = 0.0):
+    # location: 치수 문자를 기본 위치 대신 놓을 점 (도형·다른 선과 겹칠 때만 지정)
+
+    def dim_linear(self, p1, p2, base, angle: float = 0.0, location=None):
         d = self.msp.add_linear_dim(base=self.p(*base), p1=self.p(*p1), p2=self.p(*p2),
                                     angle=angle, dimstyle=DIMSTYLE,
+                                    location=self.p(*location) if location else None,
                                     dxfattribs={"layer": "DIM"})
         d.render()
         return d
 
-    def dim_diameter(self, c, r: float, angle: float = 45.0):
+    def dim_diameter(self, c, r: float, angle: float = 45.0, location=None):
         d = self.msp.add_diameter_dim(center=self.p(*c), radius=r, angle=angle,
+                                      location=self.p(*location) if location else None,
                                       dimstyle=DIMSTYLE, dxfattribs={"layer": "DIM"})
         d.render()
         return d
 
-    def dim_radius(self, c, r: float, angle: float = 45.0):
+    def dim_radius(self, c, r: float, angle: float = 45.0, location=None):
         d = self.msp.add_radius_dim(center=self.p(*c), radius=r, angle=angle,
+                                    location=self.p(*location) if location else None,
                                     dimstyle=DIMSTYLE, dxfattribs={"layer": "DIM"})
         d.render()
         return d
@@ -172,7 +190,8 @@ def draw_frame(c: Canvas, fields: Iterable[tuple[str, str]]) -> None:
     """A3 가로 도곽, 10mm 안쪽 테두리, 오른쪽 아래 180×40 표제란을 그린다.
 
     fields 는 (항목명, 값) 6개: 모듈, 시트ID, 시트 종류, 난이도, 명령어(단축키), 축척 순.
-    항목명이 빈 문자열이면 값만 쓴다. 칸 폭을 넘는 문자열은 문자 높이를 줄인다.
+    항목명이 빈 문자열이면 값만 쓴다. 문자 높이는 3.5 고정이며, 칸 폭(좌우 여백 2.5)을
+    넘으면 ValueError — 호출 측이 문구를 줄여야 한다 (manifest 의 title_commands).
     표제란은 4행 — 1·2행은 2칸씩, 3·4행은 전체 폭 1칸.
     """
     c.rect(0, 0, SHEET_W, SHEET_H, layer="FRAME")
@@ -190,10 +209,14 @@ def draw_frame(c: Canvas, fields: Iterable[tuple[str, str]]) -> None:
              (x0, 2, TITLE_W), (x0, 3, TITLE_W)]
     for (label, value), (cx, row, cell_w) in zip(fields, cells):
         s = f"{label}: {value}" if label else value
-        h = min(TEXT_H * 0.85, (cell_w - 5) / _text_width_factor(s))
-        c.text(s, (cx + 2.5, y1 - (row + 0.5) * row_h), height=h)
+        width = text_width(s)
+        if width > cell_w - 5:
+            raise ValueError(f"표제란 칸 폭 초과 ({width:.1f} > {cell_w - 5:.1f}): {s}")
+        c.text(s, (cx + 2.5, y1 - (row + 0.5) * row_h))
 
 
-def _text_width_factor(s: str) -> float:
-    """문자 높이 1 일 때의 대략적인 문자열 폭 (한글 1.0, 그 외 0.8 — 맑은고딕 대문자 기준 여유 포함)."""
-    return sum(1.0 if ord(ch) > 0x2E80 else 0.8 for ch in s)
+def text_width(s: str, height: float = TEXT_H) -> float:
+    """KOR 스타일(맑은고딕) 한 줄 문자열의 폭 (mm)."""
+    from ezdxf.fonts import fonts
+
+    return fonts.make_font(FONT, cap_height=height).text_width(s)
