@@ -145,6 +145,39 @@ def test_generation_is_deterministic(out, out2, name):
     assert _dump(ezdxf.readfile(out / name)) == _dump(ezdxf.readfile(out2 / name))
 
 
+# 회귀: M1-A03 정답의 POLYGON 입력이 실습 도형과 같은 육각형을 만들어야 한다 (QA 반려 PR #14).
+# AutoCAD POLYGON 외접(C)에 @R<θ 를 입력하면 변의 중점이 θ 에 오고 꼭짓점은 θ±30° 에 놓인다.
+def _hexagon_vertex_angles(doc, frame_index):
+    x0, y0, x1, y1 = _frames(doc)[frame_index]
+    for e in doc.modelspace().query("LWPOLYLINE[layer=='OUTLINE']"):
+        pts = [(p[0], p[1]) for p in e.get_points()]
+        if len(pts) == 6 and all(x0 <= x <= x1 and y0 <= y <= y1 for x, y in pts):
+            cx = sum(x for x, _ in pts) / 6
+            cy = sum(y for _, y in pts) / 6
+            return sorted(round(np.degrees(np.arctan2(y - cy, x - cx)) % 360, 3) for x, y in pts)
+    pytest.fail("육각형 LWPOLYLINE 없음")
+
+
+def test_m1_a03_polygon_instruction_matches_figure(docs):
+    import re
+
+    files = {f.filename: f for f in FILES}
+    p_idx = [s.sheet_id for s in files["M1_그리기.dxf"].sheets].index("M1-P03")
+    a_idx = [s.sheet_id for s in files["M1_그리기_정답.dxf"].sheets].index("M1-A03")
+    p_angles = _hexagon_vertex_angles(docs["M1_그리기.dxf"], p_idx)
+    a_angles = _hexagon_vertex_angles(docs["M1_그리기_정답.dxf"], a_idx)
+    assert p_angles == a_angles
+
+    x0, y0, x1, y1 = _frames(docs["M1_그리기_정답.dxf"])[a_idx]
+    steps = " ".join(m.plain_text() for m in docs["M1_그리기_정답.dxf"].modelspace().query("MTEXT")
+                     if x0 <= m.dxf.insert.x <= x1)
+    m = re.search(r"외접\(C\) → @(\d+)<(-?\d+)", steps)
+    assert m, "정답의 POLYGON 단계에 @반지름<각도 입력이 없음"
+    theta = float(m.group(2))
+    expected = sorted(round((theta + 30 + 60 * k) % 360, 3) for k in range(6))
+    assert a_angles == expected
+
+
 # 9. 실습 Pxx 마다 정답 Axx 가 정확히 하나 (반대도 동일)
 def test_practice_answer_pairs():
     sheets = all_sheets()
