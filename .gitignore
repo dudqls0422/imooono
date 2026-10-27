@@ -5,3 +5,6 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# CAD 교육자료 생성 결과
+output/cad_training/
