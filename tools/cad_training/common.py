@@ -110,8 +110,11 @@ class Canvas:
         seq = list(pts) + ([pts[0]] if closed else [])
         return [self.line(a, b, layer) for a, b in zip(seq, seq[1:])]
 
-    def circle(self, c, r: float, layer: str = "OUTLINE"):
-        return self.msp.add_circle(self.p(*c), r, dxfattribs={"layer": layer})
+    def circle(self, c, r: float, layer: str = "OUTLINE", linetype: str | None = None):
+        attribs = {"layer": layer}
+        if linetype:
+            attribs["linetype"] = linetype
+        return self.msp.add_circle(self.p(*c), r, dxfattribs=attribs)
 
     def arc(self, c, r: float, start: float, end: float, layer: str = "OUTLINE"):
         return self.msp.add_arc(self.p(*c), r, start, end, dxfattribs={"layer": layer})

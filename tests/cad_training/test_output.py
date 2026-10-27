@@ -431,6 +431,41 @@ def test_markers_do_not_overlap_dimensions_or_each_other(docs, fspec):
     assert not problems, "\n".join(problems)
 
 
+# 회귀(PR #16 반려): 반지름·지름 치수의 치수점이 실제 원 위, 또는 호의 각도 범위 안에 있어야 한다.
+# 문자 location 을 주면 치수점 방향이 중심→문자 위치로 바뀌어 빈 곳을 가리킬 수 있다.
+def _on_curve(curves, p):
+    for c in curves:
+        cx, cy, r = c.dxf.center.x, c.dxf.center.y, c.dxf.radius
+        if abs(np.hypot(p[0] - cx, p[1] - cy) - r) > 1e-6:
+            continue
+        if c.dxftype() == "CIRCLE":
+            return True
+        a = np.degrees(np.arctan2(p[1] - cy, p[0] - cx)) % 360
+        s, e = c.dxf.start_angle % 360, c.dxf.end_angle % 360
+        if (s <= a <= e) if s <= e else (a >= s or a <= e):
+            return True
+    return False
+
+
+@pytest.mark.parametrize("fspec", FILES, ids=FILE_IDS)
+def test_radial_dimensions_point_at_real_curves(docs, fspec):
+    msp = docs[fspec.filename].modelspace()
+    curves = [c for c in msp.query("CIRCLE ARC") if c.dxf.layer != "GUIDE"]
+    checked = 0
+    for d in msp.query("DIMENSION"):
+        kind = d.dimtype
+        if kind not in (3, 4):  # 3 지름, 4 반지름
+            continue
+        points = [d.dxf.defpoint4] + ([d.dxf.defpoint] if kind == 3 else [])
+        for p in points:
+            i = int(p.x // 470)
+            assert _on_curve(curves, (p.x, p.y)), \
+                f"{fspec.sheets[i].sheet_id} 치수점 ({p.x - i * 470:.2f}, {p.y:.2f}) 이 원·호 위가 아님"
+        checked += 1
+    if fspec.filename.startswith("M2_수정"):
+        assert checked, "M2 의 반지름·지름 치수를 하나도 검사하지 못함"
+
+
 # 회귀: M1-A03 정답의 POLYGON 입력이 실습 도형과 같은 육각형을 만들어야 한다 (QA 반려 PR #14).
 # AutoCAD POLYGON 외접(C)에 @R<θ 를 입력하면 변의 중점이 θ 에 오고 꼭짓점은 θ±30° 에 놓인다.
 def _hexagon_vertex_angles(doc, frame_index):

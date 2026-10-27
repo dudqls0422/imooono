@@ -339,7 +339,7 @@ def p01_walls(c: Canvas, spec):
              "    3·4·5 안쪽 가로선 세 조각 (바깥쪽부터)\\P"
              "    6·7·8 안쪽 세로선 세 조각 (바깥쪽부터)\\P"
              "    나머지 3 모서리도 같은 순서로 반복\\P"
-             "    Tip: 울타리(F)로 한 모서리를 한 번에 선택 가능\\P\\P"
+             "    주의: 걸치기(C)·울타리(F)는 지나가는 선을 모두 자르므로 중심선·남길 선을 건너지 않게 한다\\P\\P"
              "벽 두께 10, 중심선은 CENTER 레이어로 유지")
     practice(c, spec, "왼쪽 시작 객체(벽 중심선)를 OFFSET 5 → TRIM 으로 정리", 10, steps, figure)
 
@@ -449,7 +449,8 @@ def p03_beam(c: Canvas, spec):
         g.dim_linear((w - ch, 0), (w - ch, h), (w + 14, h / 2), angle=90)
         g.dim_linear((0, h / 2), (cover, h / 2), (cover / 2, h / 2 + 8))
         g.dim_linear((w - ch, 0), (w, ch), (w - ch / 2, -8))
-        g.dim_radius((w - fc, h - fc), rf, angle=225, location=(w / 2, h - 30))
+        # location 을 주면 치수점 방향이 중심→문자 위치로 정해지므로, 모깎기 호(0~90°) 쪽 바깥에 둔다
+        g.dim_radius((w - fc, h - fc), rf, location=(w + 6, h + 4))
         g.dim_diameter(bars[1], rb, angle=60)
         if answer:
             g.marker(1, (-7, -7))

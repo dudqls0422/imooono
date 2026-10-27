@@ -67,7 +67,7 @@ def e02_circle(c: Canvas, spec):
 
     def before(f: Canvas):
         base(f)
-        f.circle(o, big, layer="HIDDEN")
+        f.circle(o, big, layer="GUIDE", linetype="HIDDEN")
         f.text("1단계 후 생기는 원", (o[0] - 20, o[1] + big + 6), layer="GUIDE")
         f.marker(1, o)
         f.marker(2, (tx, 20))
@@ -79,10 +79,10 @@ def e02_circle(c: Canvas, spec):
         f.circle(o, small)
         f.circle(t_center, r_t)
         _tangent_mark(f, (tx, 20), (4, -6))
-        _tangent_mark(f, t_on_circle, (-22, -2))
+        _tangent_mark(f, t_on_circle, (-24, -9))
 
     steps = ("명령: CIRCLE [Enter] (C)\\P"
-             "중심점 지정 또는 [3P/2P/Ttr]: ① 클릭\\P"
+             "원에 대한 중심점 지정 또는 [3점(3P)/2점(2P)/Ttr(접선 접선 반지름)]: ① 클릭\\P"
              "원의 반지름 지정 또는 [지름(D)]: 25 [Enter]\\P\\P"
              "[중심 스냅으로 동심원] F3 으로 객체스냅 켜기\\P"
              "C [Enter] → 큰 원에 커서를 올려 중심 표시 → ① 클릭\\P"
