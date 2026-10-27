@@ -145,6 +145,46 @@ def test_generation_is_deterministic(out, out2, name):
     assert _dump(ezdxf.readfile(out / name)) == _dump(ezdxf.readfile(out2 / name))
 
 
+# 안내문 MTEXT 는 실제 렌더링 범위가 왼쪽 안내문 영역 안에 있고 다른 엔티티와 겹치지 않아야 한다.
+# ezdxf.bbox 는 MTEXT 의 지정 폭만 쓰므로(긴 단어가 넘쳐도 모름) drawing 애드온으로 렌더링해 잰다.
+TEXT_AREA = (15.0, 15.0, 145.0, 265.0)
+
+
+def _rendered_extents(ctx, entity):
+    from ezdxf.addons.drawing import Frontend
+    from ezdxf.addons.drawing.recorder import Recorder
+
+    rec = Recorder()
+    Frontend(ctx, rec).draw_entities([entity])
+    return rec.player().bbox()
+
+
+@pytest.mark.parametrize("fspec", FILES, ids=FILE_IDS)
+def test_guide_mtext_fits_text_area(docs, fspec):
+    from ezdxf.addons.drawing import RenderContext
+
+    doc = docs[fspec.filename]
+    ctx = RenderContext(doc)
+    msp = doc.modelspace()
+    others = [(e, bbox.extents([e])) for e in msp if e.dxf.layer != "FRAME" and e.dxftype() != "MTEXT"]
+    for i, (fx, fy, _, _) in enumerate(_frames(doc)):
+        sid = fspec.sheets[i].sheet_id
+        texts = [m for m in msp.query("MTEXT[layer=='TEXT']") if fx <= m.dxf.insert.x <= fx + SHEET_W]
+        assert texts, f"{sid} 안내문 없음"
+        for m in texts:
+            b = _rendered_extents(ctx, m)
+            x0, y0, x1, y1 = b.extmin.x - fx, b.extmin.y - fy, b.extmax.x - fx, b.extmax.y - fy
+            assert (x0 >= TEXT_AREA[0] and y0 >= TEXT_AREA[1]
+                    and x1 <= TEXT_AREA[2] and y1 <= TEXT_AREA[3]), \
+                f"{sid} 안내문이 영역 밖: x {x0:.1f}~{x1:.1f}, y {y0:.1f}~{y1:.1f}"
+            for e, eb in others:
+                if not eb.has_data:
+                    continue
+                if (eb.extmin.x < b.extmax.x and eb.extmax.x > b.extmin.x
+                        and eb.extmin.y < b.extmax.y and eb.extmax.y > b.extmin.y):
+                    pytest.fail(f"{sid} 안내문이 {e.dxftype()}/{e.dxf.layer} 와 겹침")
+
+
 # 회귀: M1-A03 정답의 POLYGON 입력이 실습 도형과 같은 육각형을 만들어야 한다 (QA 반려 PR #14).
 # AutoCAD POLYGON 외접(C)에 @R<θ 를 입력하면 변의 중점이 θ 에 오고 꼭짓점은 θ±30° 에 놓인다.
 def _hexagon_vertex_angles(doc, frame_index):

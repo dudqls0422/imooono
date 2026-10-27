@@ -91,8 +91,12 @@ class Canvas:
     def p(self, x: float, y: float) -> tuple[float, float]:
         return (self.ox + x, self.oy + y)
 
-    def line(self, a, b, layer: str = "OUTLINE"):
-        return self.msp.add_line(self.p(*a), self.p(*b), dxfattribs={"layer": layer})
+    def line(self, a, b, layer: str = "OUTLINE", linetype: str | None = None):
+        """linetype 을 주면 레이어 선종류 대신 엔티티 선종류를 쓴다 (GUIDE 확대도의 중심선 등)."""
+        attribs = {"layer": layer}
+        if linetype:
+            attribs["linetype"] = linetype
+        return self.msp.add_line(self.p(*a), self.p(*b), dxfattribs=attribs)
 
     def lines(self, pts: Sequence, layer: str = "OUTLINE", closed: bool = False):
         """점열을 개별 LINE 으로 잇는다 (LINE 명령 결과와 같은 형태)."""

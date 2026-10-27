@@ -42,8 +42,18 @@ def e01_line(c: Canvas, spec):
              "· 절대: 원점(0,0) 기준 x,y\\P"
              "· 상대: 직전 점 기준 @x,y\\P"
              "· 극좌표: 직전 점 기준 @거리<각도 (+X 축에서 반시계 방향 각도)\\P\\P"
-             "[핵심 옵션]\\P닫기(C): 첫 점으로 닫고 종료\\P명령 취소(U): 직전 선분 취소")
+             "[핵심 옵션]\\P닫기(C): 첫 점으로 닫고 종료\\P명령 취소(U): 직전 선분 취소\\P\\P"
+             "※ 표시 좌표는 예시 값입니다(원점 기준). 빈 도면에서 그대로 입력하면 "
+             "After 와 같은 삼각형(밑변 60, 높이 50)이 그려진다.")
     example(c, spec, steps, before, after, "Before: 클릭할 점", "After: 결과")
+
+
+def _tangent_mark(f: Canvas, pt, label_off):
+    """실제 접점 위치를 × 로 표시 (GUIDE)."""
+    d = 2.0
+    f.line((pt[0] - d, pt[1] - d), (pt[0] + d, pt[1] + d), layer="GUIDE")
+    f.line((pt[0] - d, pt[1] + d), (pt[0] + d, pt[1] - d), layer="GUIDE")
+    f.text("접점", (pt[0] + label_off[0], pt[1] + label_off[1]), height=SMALL, layer="GUIDE")
 
 
 def e02_circle(c: Canvas, spec):
@@ -58,6 +68,8 @@ def e02_circle(c: Canvas, spec):
 
     def before(f: Canvas):
         base(f)
+        f.circle(o, big, layer="HIDDEN")
+        f.text("1단계 후 생기는 원", (o[0] - 20, o[1] + big + 6), height=SMALL, layer="GUIDE")
         f.marker(1, o)
         f.marker(2, (tx, 20))
         f.marker(3, t_on_circle)
@@ -67,18 +79,22 @@ def e02_circle(c: Canvas, spec):
         f.circle(o, big)
         f.circle(o, small)
         f.circle(t_center, r_t)
+        _tangent_mark(f, (tx, 20), (4, -6))
+        _tangent_mark(f, t_on_circle, (-22, -2))
 
     steps = ("명령: CIRCLE [Enter] (C)\\P"
-             "원에 대한 중심점 지정 또는 [3점(3P)/2점(2P)/Ttr(접선 접선 반지름)]: ①\\P"
+             "중심점 지정 또는 [3P/2P/Ttr]: ① 클릭\\P"
              "원의 반지름 지정 또는 [지름(D)]: 25 [Enter]\\P\\P"
-             "[OSNAP 중심] F3 으로 객체스냅 켜기\\P"
-             "C [Enter] → 기존 원에 커서를 올려 중심 스냅 ① 클릭\\P"
-             "반지름: 12 [Enter] (동심원)\\P\\P"
-             "[OSNAP 접점 · Ttr 옵션]\\P"
+             "[중심 스냅으로 동심원] F3 으로 객체스냅 켜기\\P"
+             "C [Enter] → 큰 원에 커서를 올려 중심 표시 → ① 클릭\\P"
+             "반지름: 12 [Enter]\\P\\P"
+             "[Ttr — 접점 스냅이 자동 적용]\\P"
              "C [Enter] → T [Enter]\\P"
-             "첫 번째 접점: ② 선 위 클릭\\P"
-             "두 번째 접점: ③ 큰 원 위 클릭\\P"
-             "원의 반지름 지정: 10 [Enter]")
+             "원의 첫 번째 접점에 대한 객체 위의 점 지정: ② 선 위\\P"
+             "원의 두 번째 접점에 대한 객체 위의 점 지정: ③ 큰 원 위\\P"
+             "원의 반지름 지정: 10 [Enter]\\P\\P"
+             "②③ 은 실제 접점 위치(After 의 × 표시). 근처를 클릭하면 AutoCAD 가 접점을 계산한다. "
+             "Before 의 점선 원은 첫 단계에서 그리는 R25 원")
     example(c, spec, steps, before, after, "Before: 클릭할 점", "After: 결과")
 
 
@@ -244,7 +260,8 @@ def p02_grid_wall(c: Canvas, spec):
             f.marker(4, (180, 18))
 
     steps = ("① LINE (L): 그리드선 X1~X3 (간격 100), Y1~Y2 (간격 100) — CENTER 레이어\\P"
-             "② CIRCLE (C): 그리드 버블 반지름 6 + 문자 X1~X3, Y1~Y2\\P"
+             "② CIRCLE (C): 그리드 버블 반지름 6\\P"
+             "    버블 안 문자(X1… 등)는 참고 표기 — 문자 입력(TEXT)은 이 과정 범위 밖이므로 생략\\P"
              "③ PLINE (PL): 벽 바깥선 — 시작점에서 FROM [Enter] → 기준점: X1·Y1 교차점 → "
              "간격띄우기: @-10,-10 → @220,0 → @0,120 → @-220,0 → C\\P"
              "④ RECTANG (REC): 벽 안쪽선 — 첫 구석점에서 FROM [Enter] → 기준점: X1·Y1 교차점 → "

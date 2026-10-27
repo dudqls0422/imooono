@@ -260,7 +260,7 @@ def e09_chamfer(c: Canvas, spec):
 
     steps = ("명령: CHAMFER [Enter] (CHA)\\P"
              "(자르기 모드) 현재 모따기 거리1 = 0, 거리2 = 0\\P"
-             "첫 번째 선 선택 또는 [명령 취소(U)/폴리선(P)/거리(D)/각도(A)/자르기(T)/메서드(E)/다중(M)]: D [Enter]\\P"
+             "첫 번째 선 선택 또는 [… 거리(D) / 각도(A) … 다중(M)]: D [Enter]\\P"
              "첫 번째 모따기 거리 지정 <0>: 10 [Enter]\\P"
              "두 번째 모따기 거리 지정 <10>: [Enter]\\P"
              "첫 번째 선 선택: ①\\P"
@@ -290,7 +290,7 @@ def e10_array(c: Canvas, spec):
     steps = ("명령: ARRAYRECT [Enter] (AR → 직사각형(R))\\P"
              "객체 선택: ① 원 클릭 → [Enter]\\P"
              "유형 = 직사각형  연관 = 예\\P"
-             "그립을 선택하여 배열 편집 또는 [연관(AS)/기준점(B)/개수(COU)/간격두기(S)/열(COL)/행(R)/레벨(L)/종료(X)]:\\P"
+             "그립을 선택하여 배열 편집 또는 [… 개수(COU) / 간격두기(S) … 종료(X)]:\\P"
              "  COU [Enter] → 열 수 4 [Enter] → 행 수 3 [Enter]\\P"
              "  S [Enter] → 열 사이 거리 25 [Enter] → 행 사이 거리 25 [Enter]\\P"
              "  [Enter] 로 종료\\P\\P"
@@ -328,16 +328,45 @@ def p01_walls(c: Canvas, spec):
         g.dim_linear((w / 2, -t), (w / 2, t), (w / 2 + 6, 0), angle=90)
         if answer:
             g.marker(1, (30, -12))
-            g.marker(2, (-12, -12))
-            g.marker(3, (w - 12, h - 12))
+            g.marker(2, (-14, -14))
+            _trim_detail(f0.at(*TRIM_DETAIL_ORIGIN), t)
 
     steps = ("① OFFSET (O): 거리 5 → 중심선 4개를 각각 안·밖으로 간격띄우기 (8개 선)\\P"
-             "    옵션 도면층(L) → 현재(C) 로 두고 현재 도면층을 OUTLINE 으로\\P"
-             "② TRIM (TR): 바깥 모서리 4곳의 튀어나온 끝 자르기\\P"
-             "③ TRIM (TR): 안쪽 모서리 4곳 — 벽 안으로 들어간 끝 자르기\\P\\P"
-             "벽 두께 10 (중심선에서 양쪽 5). 중심선은 CENTER 레이어로 유지\\P"
-             "치수는 참고용 표기(DIM 레이어)")
+             "    옵션 도면층(L) → 현재(C), 현재 도면층은 OUTLINE\\P"
+             "② TRIM (TR) 빠른 작업 모드: 모서리 4곳 × 8번 = 32번 클릭\\P"
+             "    중심선도 경계가 되므로 안쪽 선 끝은 세 조각으로 끊긴다.\\P"
+             "    왼쪽 아래 모서리 (아래 확대도 1~8):\\P"
+             "    1 바깥 가로선 끝   2 바깥 세로선 끝\\P"
+             "    3·4·5 안쪽 가로선 세 조각 (바깥쪽부터)\\P"
+             "    6·7·8 안쪽 세로선 세 조각 (바깥쪽부터)\\P"
+             "    나머지 3 모서리도 같은 순서로 반복\\P"
+             "    Tip: 울타리(F)로 한 모서리를 한 번에 선택 가능\\P\\P"
+             "벽 두께 10, 중심선은 CENTER 레이어로 유지")
     practice(c, spec, "왼쪽 시작 객체(벽 중심선)를 OFFSET 5 → TRIM 으로 정리", 10, steps, figure)
+
+
+# 정답 확대도: 왼쪽 열 아래(안내문 영역 밖), 축척 ×4, 창 범위 -12~8 (도면 단위)
+TRIM_DETAIL_ORIGIN = (68.0, 63.0)
+TRIM_DETAIL_SCALE = 4.0
+
+
+def _trim_detail(f: Canvas, t: float) -> None:
+    """M2-A01 의 TRIM 전 왼쪽 아래 모서리 확대도 (GUIDE). 1~8 은 빠른 작업 모드 클릭 순서."""
+    k = TRIM_DETAIL_SCALE
+    lo, hi = -10.0, 8.0
+
+    def seg(a, b, linetype=None):
+        f.line((a[0] * k, a[1] * k), (b[0] * k, b[1] * k), layer="GUIDE", linetype=linetype)
+
+    seg((lo, 0), (hi, 0), "CENTER")
+    seg((0, lo), (0, hi), "CENTER")
+    for d in (-t, t):
+        seg((lo, d), (hi, d))
+        seg((d, lo), (d, hi))
+    picks = [(-7.5, -t), (-t, -7.5), (-7.5, t), (-2.5, t), (2.5, t), (t, -7.5), (t, -2.5), (t, 2.5)]
+    for n, (x, y) in enumerate(picks, 1):
+        f.marker(n, (x * k, y * k))
+    f.text("TRIM 전 왼쪽 아래 모서리 확대 (×4)", (-48, 36), layer="GUIDE")
 
 
 def p02_columns(c: Canvas, spec):

@@ -82,7 +82,7 @@ M2_PRACTICES = (
 )
 
 C1_PRACTICES = (
-    _pr("C1-P01", "소규모 평면 일부 (종합)",
+    _pr("C1-P01", "소규모 평면 일부 종합",
         "LINE (L), RECTANG (REC), CIRCLE (C), ARC (A), OFFSET (O), TRIM (TR), ARRAY (AR), MIRROR (MI)",
         ("LINE", "LWPOLYLINE", "CIRCLE", "ARC"), "상"),
 )
