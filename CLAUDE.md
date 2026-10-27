@@ -61,10 +61,10 @@ Dev ── QA 통과 ─▶ 머지 ─▶ Main 에 완료보고 ─▶ Main 이 
 
 | 역할 | 주소 |
 |---|---|
-| Main | `orca-b4` |
-| Plan | `orca-plan-8e` |
-| Dev  | `orca-dev-a0` |
-| QA   | `orca-qa-fb` |
+| Main | `orca-00` |
+| Plan | `orca-plan-c0` |
+| Dev  | `orca-dev-43` |
+| QA   | `orca-qa-47` |
 
 > 세션을 다시 열면 주소가 바뀐다. 값이 안 맞으면 `ListAgents` 결과를 우선한다.
 
