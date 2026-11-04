@@ -8,3 +8,8 @@ __pycache__/
 
 # CAD 교육자료 생성 결과
 output/cad_training/
+
+# 구조계산서 양식 검증 결과 / 빌드 임시 파일
+output/calc_sheet_template/
+tools/calc_sheet_template/*.tmp.xlsm
+tools/calc_sheet_template/~$*
