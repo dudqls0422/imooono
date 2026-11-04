@@ -24,6 +24,7 @@ from .build_template import (
     PAGE_MARGIN_TOP,
     SETTINGS_SHEET,
     ExcelSession,
+    emit,
 )
 
 PT_PER_MM = 72 / 25.4
@@ -366,7 +367,7 @@ def main(argv: list[str] | None = None) -> int:
         rec = run_excel(session.xl, work, out)
     report = analyze(out, rec)
     (out / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+    emit(json.dumps(report, ensure_ascii=False, indent=2))  # cp949 로 리디렉션해도 멈추지 않게
     return 0
 
 

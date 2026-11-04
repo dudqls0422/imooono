@@ -178,6 +178,59 @@ def test_settings_notes_mention_limit():
     assert any("35자 이내" in n and "자동으로 작아집니다" in n for n in notes)
 
 
+# ---------------------------------------------------------------- 출력 인코딩 (QA 반려 PR #17: cp949 리디렉션에서 build 중단)
+
+
+def test_messages_survive_cp949_stream(monkeypatch):
+    import io
+
+    out = io.TextIOWrapper(io.BytesIO(), encoding="cp949")
+    err = io.TextIOWrapper(io.BytesIO(), encoding="cp949")
+    monkeypatch.setattr(bt.sys, "stdout", out)
+    monkeypatch.setattr(bt.sys, "stderr", err)
+    msg = "열 너비 2.71 선택 — 화면 18.00pt, A~Z 173.95mm ≤ 180mm, 9.52×9.00mm → …"
+    bt.info(msg)
+    bt.warn(msg)
+    bt.emit(msg)
+    out.flush()
+    err.flush()
+    text = out.buffer.getvalue().decode("cp949")
+    assert "[정보] 열 너비 2.71 선택" in text and "173.95mm" in text
+    assert "—" not in text  # cp949 에 없는 글자는 대체 문자로
+    assert "[경고]" in err.buffer.getvalue().decode("cp949")
+
+
+def test_redirected_output_does_not_crash_subprocess(tmp_path):
+    """PYTHONIOENCODING 없이 표준 출력을 파일로 넘겨도(=cp949) 메시지 출력에서 멈추지 않는다."""
+    import os
+    import subprocess
+    import sys
+
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONIOENCODING", "PYTHONUTF8")}
+    code = (
+        "from tools.calc_sheet_template.build_template import info, warn, emit\n"
+        "info('열 너비 선택 — A~Z 173.95mm ≤ 180mm')\n"
+        "warn('그림 보정 — 기준 ±0.5mm')\n"
+        "emit('AccessVBOM 시작 전 값 = 1, 종료 후 값 = 1, 변경 없음')\n"
+    )
+    log = tmp_path / "build.log"
+    with open(log, "wb") as fh:
+        proc = subprocess.run(
+            [sys.executable, "-c", code], stdout=fh, stderr=subprocess.STDOUT, env=env, cwd=bt.HERE.parent.parent
+        )
+    data = log.read_bytes()
+    assert proc.returncode == 0, data.decode("cp949", errors="replace")
+    assert b"Traceback" not in data
+
+
+def test_no_bare_print_outside_emit():
+    for name in ("build_template.py", "verify_template.py"):
+        lines = (bt.HERE / name).read_text(encoding="utf-8").splitlines()
+        bare = [i for i, line in enumerate(lines, 1) if "print(" in line and "def emit" not in line]
+        allowed = [i for i in bare if "print(safe, file=stream" in lines[i - 1]]
+        assert bare == allowed, f"{name}: emit() 대신 print() 직접 호출 {bare}"
+
+
 def test_to_crlf():
     assert bt.to_crlf("a\nb\r\nc") == "a\r\nb\r\nc"
 

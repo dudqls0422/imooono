@@ -91,12 +91,24 @@ def mm_to_px(mm: float, dpi: int = FOOTER_DPI) -> int:
     return round(mm / 25.4 * dpi)
 
 
+def emit(msg: str, stream=None) -> None:
+    """stream 의 인코딩으로 쓸 수 없는 글자는 대체 문자로 바꿔 출력한다.
+
+    출력을 파일·파이프로 넘기면 한국어 Windows 에서 인코딩이 cp949 가 되는데, cp949 에 없는 글자
+    (예: '—' U+2014)가 있으면 UnicodeEncodeError 로 build 가 .xlsm 저장 전에 멈췄다(QA 반려, PR #17).
+    """
+    stream = stream or sys.stdout
+    encoding = getattr(stream, "encoding", None) or "utf-8"
+    safe = msg.encode(encoding, errors="replace").decode(encoding, errors="replace")
+    print(safe, file=stream, flush=True)
+
+
 def warn(msg: str) -> None:
-    print(f"[경고] {msg}", file=sys.stderr)
+    emit(f"[경고] {msg}", sys.stderr)
 
 
 def info(msg: str) -> None:
-    print(f"[정보] {msg}")
+    emit(f"[정보] {msg}")
 
 
 # ---------------------------------------------------------------- 로고 / 이미지
@@ -339,11 +351,10 @@ def _retry(fn, timeout: float = 60.0):
             if time.monotonic() - start > 3 and _activation_dialog_open():
                 # Office 정품 인증 마법사는 사용자가 직접 닫는다(스크립트가 누르지 않음). 닫힐 때까지 기다린다.
                 if not _ACTIVATION_NOTICE_SHOWN:
-                    print(
+                    emit(
                         "[안내] 'Microsoft Office 인증 마법사' 창이 떠 있어 Excel 이 멈춰 있습니다. "
                         f"창에서 [닫기]를 눌러 주세요. 최대 {ACTIVATION_WAIT / 60:.0f}분 기다립니다.",
-                        file=sys.stderr,
-                        flush=True,
+                        sys.stderr,
                     )
                     _ACTIVATION_NOTICE_SHOWN = True
                 deadline = max(deadline, start + ACTIVATION_WAIT)
@@ -991,7 +1002,7 @@ def build(logo_src: Path | None, out: Path, assets: Path = ASSETS) -> dict:
         result["vbom_before"] = read_access_vbom(version)
         info(f"AccessVBOM 시작 전 값 (Excel {version}): {describe_vbom(result['vbom_before'])}")
         if effective_access_vbom(result["vbom_before"]) != 1:
-            print(VBOM_STOP_MESSAGE, file=sys.stderr)
+            emit(VBOM_STOP_MESSAGE, sys.stderr)
             raise SystemExit(2)
         # COM 참조가 함수 지역 변수에만 남도록 따로 호출한다(끝나면 참조가 풀려 Quit 이 깔끔하게 된다)
         result.update(_build_workbook(session.xl, logo_png, header_png, footer_png, sources, tmp_out))
@@ -1004,7 +1015,7 @@ def build(logo_src: Path | None, out: Path, assets: Path = ASSETS) -> dict:
     after = effective_access_vbom(result["vbom_after"])
     changed = "변경 없음" if result["vbom_before"] == result["vbom_after"] else "변경됨(확인 필요)"
     info(f"AccessVBOM 종료 후 값: {describe_vbom(result['vbom_after'])}")
-    print(f"AccessVBOM 시작 전 값 = {before}, 종료 후 값 = {after}, {changed}")
+    emit(f"AccessVBOM 시작 전 값 = {before}, 종료 후 값 = {after}, {changed}")
     return result
 
 
